@@ -94,6 +94,15 @@ export const meta = {
     return j; // { id, post_id }
   },
 
+  // Comment on a published FB post (page token) or IG media (system token)
+  fbComment: async (postId: string, pageToken: string, message: string) => {
+    const res = await fetch(`${BASE}/${postId}/comments`, { method: "POST", body: new URLSearchParams({ message, access_token: pageToken }) });
+    const j: any = await res.json();
+    if (!res.ok || j.error) throw new Error(`Facebook comment failed: ${j.error?.message || res.statusText}`);
+    return j;
+  },
+  igComment: (mediaId: string, message: string) => call("POST", `${mediaId}/comments`, { message }),
+
   // Instagram feed post: create container, wait until ready, publish
   igPhotoPost: async (igId: string, token: string, imageUrl: string, caption: string) => {
     const c = await call("POST", `${igId}/media`, { image_url: imageUrl, caption, access_token: token });

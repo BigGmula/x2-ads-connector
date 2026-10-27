@@ -173,9 +173,10 @@ function buildServer() {
       caption: z.string().min(1).max(2200),
       platforms: z.array(z.enum(["facebook", "instagram"])).default(["facebook", "instagram"]),
       instagram_caption: z.string().max(2200).optional().describe("Optional different caption for Instagram"),
-      schedule_at: z.string().optional().describe("ISO time to schedule the Facebook post, e.g. 2026-10-28T11:30:00-04:00"),
+      schedule_at: z.string().optional().describe("ISO time to schedule the Facebook post, e.g. 2026-10-28T11:30:00-04:00. Scheduled posts can't get a first comment."),
+      first_comment: z.string().max(2200).optional().describe("Auto-posted as the first comment on each published post, e.g. 'Shop here 👉 <product link>'. Links are clickable in Facebook comments, not Instagram."),
     },
-  }, wrap(async ({ page_id, image_url, caption, platforms, instagram_caption, schedule_at }: any) => {
+  }, wrap(async ({ page_id, image_url, caption, platforms, instagram_caption, schedule_at, first_comment }: any) => {
     guardWrite();
     const page = await meta.pageInfo(page_id);
     const out: Record<string, unknown> = { page: page.name };
@@ -187,7 +188,12 @@ function buildServer() {
       }
       try {
         const r = await meta.fbPhotoPost(page_id, page.access_token, image_url, caption, when);
-        out.facebook = { post_id: r.post_id || r.id, scheduled: !!when };
+        const postId = r.post_id || r.id;
+        out.facebook = { post_id: postId, scheduled: !!when };
+        if (first_comment && !when) {
+          try { await meta.fbComment(postId, page.access_token, first_comment); (out.facebook as any).first_comment = "posted"; }
+          catch (e) { (out.facebook as any).first_comment = (e as Error).message; }
+        }
       } catch (e) { out.facebook = { error: (e as Error).message }; }
     }
     if (platforms.includes("instagram")) {
@@ -197,6 +203,10 @@ function buildServer() {
         try {
           const r = await meta.igPhotoPost(ig, page.access_token, image_url, instagram_caption || caption);
           out.instagram = { media_id: r.id, account: page.instagram_business_account?.username };
+          if (first_comment) {
+            try { await meta.igComment(r.id, first_comment); (out.instagram as any).first_comment = "posted"; }
+            catch (e) { (out.instagram as any).first_comment = (e as Error).message; }
+          }
         } catch (e) { out.instagram = { error: (e as Error).message }; }
       }
     }
