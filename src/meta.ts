@@ -1,0 +1,81 @@
+// Meta (Facebook/Instagram) Marketing API client
+const V = process.env.META_API_VERSION || "v23.0";
+const BASE = `https://graph.facebook.com/${V}`;
+
+function token(): string {
+  const t = process.env.META_ACCESS_TOKEN;
+  if (!t) throw new Error("META_ACCESS_TOKEN is not set. See SETUP.md step 2.");
+  return t;
+}
+
+export function actId(id: string): string {
+  const clean = String(id).replace(/^act_/, "").trim();
+  return `act_${clean}`;
+}
+
+async function call(method: "GET" | "POST", path: string, params: Record<string, unknown> = {}) {
+  const url = new URL(`${BASE}/${path.replace(/^\//, "")}`);
+  const body = new URLSearchParams();
+  const target = method === "GET" ? url.searchParams : body;
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    target.set(k, typeof v === "object" ? JSON.stringify(v) : String(v));
+  }
+  target.set("access_token", token());
+  const res = await fetch(url, method === "POST" ? { method, body } : { method });
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok || json.error) {
+    const e = json.error || {};
+    throw new Error(`Meta API error ${res.status}: ${e.message || res.statusText}${e.error_user_msg ? " — " + e.error_user_msg : ""}`);
+  }
+  return json;
+}
+
+export const meta = {
+  listAdAccounts: () =>
+    call("GET", "me/adaccounts", { fields: "id,name,account_status,currency,amount_spent,timezone_name", limit: 100 }),
+
+  listCampaigns: (accountId: string, status?: string[]) =>
+    call("GET", `${actId(accountId)}/campaigns`, {
+      fields: "id,name,objective,status,effective_status,daily_budget,lifetime_budget,start_time,stop_time,special_ad_categories",
+      effective_status: status && status.length ? status : undefined,
+      limit: 200,
+    }),
+
+  // parentPath is either "act_123" (whole account) or a campaign id
+  listAdSets: (parentPath: string) =>
+    call("GET", `${parentPath}/adsets`, {
+      fields: "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,optimization_goal,billing_event,targeting",
+      limit: 200,
+    }),
+
+  listAds: (parentId: string) =>
+    call("GET", `${parentId}/ads`, {
+      fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,thumbnail_url}",
+      limit: 200,
+    }),
+
+  insights: (objectId: string, datePreset: string, level: string, breakdowns?: string) =>
+    call("GET", `${objectId}/insights`, {
+      date_preset: datePreset,
+      level,
+      breakdowns,
+      fields:
+        "campaign_name,adset_name,ad_name,spend,impressions,reach,clicks,ctr,cpc,cpm,frequency,actions,cost_per_action_type,purchase_roas",
+      limit: 500,
+    }),
+
+  createCampaign: (accountId: string, p: { name: string; objective: string; daily_budget_cents?: number; special_ad_categories: string[] }) =>
+    call("POST", `${actId(accountId)}/campaigns`, {
+      name: p.name,
+      objective: p.objective,
+      status: "PAUSED", // always created paused — you flip it on yourself
+      special_ad_categories: p.special_ad_categories,
+      daily_budget: p.daily_budget_cents,
+      bid_strategy: p.daily_budget_cents ? "LOWEST_COST_WITHOUT_CAP" : undefined,
+    }),
+
+  update: (objectId: string, fields: Record<string, unknown>) => call("POST", objectId, fields),
+
+  get: (objectId: string, fields: string) => call("GET", objectId, { fields }),
+};
