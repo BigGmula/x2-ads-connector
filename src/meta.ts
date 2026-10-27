@@ -78,4 +78,31 @@ export const meta = {
   update: (objectId: string, fields: Record<string, unknown>) => call("POST", objectId, fields),
 
   get: (objectId: string, fields: string) => call("GET", objectId, { fields }),
+
+  // ----- Organic posting (Facebook Page + Instagram) -----
+  listPages: () => call("GET", "me/accounts", { fields: "id,name,instagram_business_account{id,username}", limit: 100 }),
+
+  pageInfo: (pageId: string) => call("GET", pageId, { fields: "name,access_token,instagram_business_account{id,username}" }),
+
+  // Facebook photo post on a Page (optionally scheduled 10 min – 30 days ahead)
+  fbPhotoPost: async (pageId: string, pageToken: string, imageUrl: string, caption: string, scheduleUnix?: number) => {
+    const body = new URLSearchParams({ url: imageUrl, caption, access_token: pageToken });
+    if (scheduleUnix) { body.set("published", "false"); body.set("scheduled_publish_time", String(scheduleUnix)); }
+    const res = await fetch(`${BASE}/${pageId}/photos`, { method: "POST", body });
+    const j: any = await res.json();
+    if (!res.ok || j.error) throw new Error(`Facebook post failed: ${j.error?.message || res.statusText}`);
+    return j; // { id, post_id }
+  },
+
+  // Instagram feed post: create container, wait until ready, publish
+  igPhotoPost: async (igId: string, token: string, imageUrl: string, caption: string) => {
+    const c = await call("POST", `${igId}/media`, { image_url: imageUrl, caption, access_token: token });
+    for (let i = 0; i < 10; i++) {
+      const s = await call("GET", c.id, { fields: "status_code" });
+      if (s.status_code === "FINISHED") break;
+      if (s.status_code === "ERROR") throw new Error("Instagram could not process the image.");
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return call("POST", `${igId}/media_publish`, { creation_id: c.id });
+  },
 };

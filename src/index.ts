@@ -157,6 +157,52 @@ function buildServer() {
     return { object_id, name: before.name, old_daily: Number(before.daily_budget || 0) / 100, new_daily: daily_budget_dollars };
   }));
 
+  // ===== META ORGANIC POSTING =====
+  s.registerTool("meta_list_pages", {
+    title: "Meta: list Pages + Instagram",
+    description: "List the Facebook Pages this connector can post to, with each Page's linked Instagram account.",
+    inputSchema: {},
+  }, wrap(async () => (await meta.listPages()).data));
+
+  s.registerTool("meta_publish_post", {
+    title: "Meta: publish photo post (Facebook + Instagram)",
+    description: "Publish a photo post to a Facebook Page and/or its linked Instagram account. Facebook can be scheduled ahead (schedule_at, 10 min to 30 days out); Instagram always posts immediately. Instagram captions can't have clickable links, so end them with 'Link in bio'. Use a public image URL (e.g. the Shopify product image).",
+    inputSchema: {
+      page_id: z.string(),
+      image_url: z.string().url(),
+      caption: z.string().min(1).max(2200),
+      platforms: z.array(z.enum(["facebook", "instagram"])).default(["facebook", "instagram"]),
+      instagram_caption: z.string().max(2200).optional().describe("Optional different caption for Instagram"),
+      schedule_at: z.string().optional().describe("ISO time to schedule the Facebook post, e.g. 2026-10-28T11:30:00-04:00"),
+    },
+  }, wrap(async ({ page_id, image_url, caption, platforms, instagram_caption, schedule_at }: any) => {
+    guardWrite();
+    const page = await meta.pageInfo(page_id);
+    const out: Record<string, unknown> = { page: page.name };
+    if (platforms.includes("facebook")) {
+      let when: number | undefined;
+      if (schedule_at) {
+        when = Math.floor(new Date(schedule_at).getTime() / 1000);
+        if (!Number.isFinite(when)) throw new Error("schedule_at is not a valid date.");
+      }
+      try {
+        const r = await meta.fbPhotoPost(page_id, page.access_token, image_url, caption, when);
+        out.facebook = { post_id: r.post_id || r.id, scheduled: !!when };
+      } catch (e) { out.facebook = { error: (e as Error).message }; }
+    }
+    if (platforms.includes("instagram")) {
+      const ig = page.instagram_business_account?.id;
+      if (!ig) out.instagram = { error: "No Instagram professional account is linked to this Page." };
+      else {
+        try {
+          const r = await meta.igPhotoPost(ig, page.access_token, image_url, instagram_caption || caption);
+          out.instagram = { media_id: r.id, account: page.instagram_business_account?.username };
+        } catch (e) { out.instagram = { error: (e as Error).message }; }
+      }
+    }
+    return out;
+  }));
+
   // ===== GOOGLE =====
   s.registerTool("google_list_accounts", {
     title: "Google Ads: list accounts",
