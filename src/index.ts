@@ -66,13 +66,15 @@ type ReelJob = { id: string; status: "queued" | "building" | "done" | "failed"; 
 const reelJobs = new Map<string, ReelJob>();
 const reelJobsByKey = new Map<string, ReelJob>(); // build settings -> latest job with those settings
 let reelQueue: Promise<unknown> = Promise.resolve();
-function startReelJob(work: () => Promise<unknown>, variants: number): ReelJob {
-  const job = { id: `reel_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, status: "queued", started: Date.now(), variants } as ReelJob;
-  job.done = (reelQueue = reelQueue.then(async () => {
+function startReelJob(work: () => Promise<unknown>, variants: number, queued = true, prefix = "reel"): ReelJob {
+  const job = { id: `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, status: "queued", started: Date.now(), variants } as ReelJob;
+  const run = async () => {
     job.status = "building";
     try { job.result = await work(); job.status = "done"; }
-    catch (e) { job.status = "failed"; job.error = (e as Error).message; console.error(`reel ${job.id} failed:`, e); }
-  })).then(() => {});
+    catch (e) { job.status = "failed"; job.error = (e as Error).message; console.error(`${prefix} ${job.id} failed:`, e); }
+  };
+  // Builds wait their turn (memory); publishing is light and starts right away
+  job.done = (queued ? (reelQueue = reelQueue.then(run)) : run()).then(() => {});
   reelJobs.set(job.id, job);
   for (const [id, j] of reelJobs) if (reelJobs.size > 50 && j.status !== "queued" && j.status !== "building") reelJobs.delete(id);
   return job;
@@ -80,10 +82,12 @@ function startReelJob(work: () => Promise<unknown>, variants: number): ReelJob {
 async function waitForJob(job: ReelJob, ms: number) {
   await Promise.race([job.done, new Promise((r) => setTimeout(r, ms))]);
   if (job.status === "done") return { job_id: job.id, status: "done", ...(job.result as object) };
-  if (job.status === "failed") throw new Error(`Reel build failed: ${job.error}`);
+  if (job.status === "failed") throw new Error(`${job.id.startsWith("post") ? "Publishing" : "Reel build"} failed: ${job.error}`);
   return {
     job_id: job.id, status: job.status, elapsed_s: Math.round((Date.now() - job.started) / 1000),
-    next: `Still ${job.status}. In about 30-60 s, call get_reel with job_id "${job.id}" (or call build_reel again with the same settings) to get the video. About 1-2 min per variant in total.`,
+    next: job.id.startsWith("post")
+      ? `Still publishing (Meta is processing the video). In about 30 s, call publish_reel again with the same settings (or get_reel with job_id "${job.id}"). It won't post twice.`
+      : `Still ${job.status}. In about 30-60 s, call get_reel with job_id "${job.id}" (or call build_reel again with the same settings) to get the video. About 1-2 min per variant in total.`,
   };
 }
 
@@ -92,7 +96,7 @@ function buildServer() {
   const s = new McpServer({ name: "x2-ads-connector", version: "1.0.0" });
 
   // Tag every tool read-only vs write so Claude (and the directory) know which ones change things
-  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords", "build_reel"]);
+  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords", "build_reel", "publish_reel"]);
   const reg = s.registerTool.bind(s) as any;
   (s as any).registerTool = (name: string, cfg: any, cb: any) =>
     reg(name, { ...cfg, annotations: { title: cfg.title, readOnlyHint: !WRITES.has(name), destructiveHint: false, openWorldHint: true } }, cb);
@@ -330,6 +334,110 @@ function buildServer() {
         await rm(dir, { recursive: true, force: true });
       }
     }, variants);
+    reelJobsByKey.set(key, job);
+    return await waitForJob(job, 20_000);
+  }));
+
+  s.registerTool("publish_reel", {
+    title: "Reels: publish to Instagram + Facebook",
+    description:
+      "Publish a finished reel (video_url from build_reel) to Instagram Reels and/or Facebook Page Reels, then post the product link as the first comment. " +
+      "Posting is public: show the user the caption, platforms and video first, and only call with confirm: true after they approve. dry_run: true uploads and checks everything on Meta's side but posts nothing. " +
+      "Copy rules (47 Swag Co): lead with the town, then the offer; Instagram caption ends with 'Link in bio' (links aren't clickable there); Facebook can carry the full shop link; no delivery-date promises. " +
+      "The first comment is the bare product URL only (from product_id). Products on HOLD are refused. A daily cap (MAX_DAILY_POSTS, default 2) blocks extra posts. " +
+      "Runs in the background: returns a job_id; call publish_reel again with the same settings (or get_reel with the job_id) until status is 'done'. The voiceover is AI-generated: turn on the AI-content label in the app if required.",
+    inputSchema: {
+      video_url: z.string().url().describe("Public MP4 URL from build_reel"),
+      cover_url: z.string().url().optional().describe("Cover image URL from build_reel (Instagram cover)"),
+      caption: z.string().min(1).max(2200).describe("Facebook caption (also used for Instagram unless instagram_caption is given)"),
+      instagram_caption: z.string().max(2200).optional(),
+      product_id: z.string().optional().describe("P01...; used for the first comment (product URL) and the HOLD check"),
+      first_comment: z.string().max(2200).optional().describe("Override the first comment; default is the product URL"),
+      platforms: z.array(z.enum(["instagram", "facebook"])).default(["instagram", "facebook"]),
+      page_id: z.string().optional().describe("Facebook Page ID; default the 47 Swag Co Page"),
+      dry_run: z.boolean().default(false),
+      confirm: z.boolean().optional(),
+    },
+  }, wrap(async ({ video_url, cover_url, caption, instagram_caption, product_id, first_comment, platforms, page_id, dry_run, confirm }: any) => {
+    guardWrite();
+    let product: SlideSet | undefined;
+    if (product_id) {
+      product = (await slideSets()).find((p) => p.id.toUpperCase() === String(product_id).trim().toUpperCase());
+      if (!product) throw new Error(`No product ${product_id}. Use list_reel_products to see the IDs.`);
+      if (product.hold && !dry_run) throw new Error(`Refused: ${product.id} is on HOLD (${product.status}). Only Glen can release it.`);
+    }
+    const comment = first_comment || product?.url;
+    const pageId = page_id || process.env.META_PAGE_ID || "1378673685337029";
+    const page = await meta.pageInfo(pageId);
+    const ig = page.instagram_business_account?.id;
+    if (platforms.includes("instagram") && !ig) throw new Error("No Instagram professional account is linked to this Page.");
+
+    if (!dry_run) {
+      // Daily cap (counted on Instagram, Eastern time) so the account isn't flagged for posting too much
+      const cap = Number(process.env.MAX_DAILY_POSTS || 2);
+      if (ig) {
+        const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        const posted = ((await meta.igRecentMedia(ig)).data || []).filter((m: any) => new Date(m.timestamp).toLocaleDateString("en-CA", { timeZone: "America/New_York" }) === today).length;
+        if (posted >= cap) throw new Error(`Refused: ${posted} posts already today on Instagram (cap ${cap}, MAX_DAILY_POSTS). Try tomorrow or raise the cap.`);
+      }
+      if (!confirm) throw new Error(`Not posted yet: this publishes publicly to ${platforms.join(" + ")} on ${page.name}. Show the user the video, caption${comment ? ` and first comment (${comment})` : ""}, get their OK, then call again with confirm: true.`);
+    }
+
+    const key = JSON.stringify(["publish", video_url, platforms, dry_run]);
+    const recent = reelJobsByKey.get(key);
+    if (recent && reelJobs.has(recent.id) && recent.status !== "failed") return await waitForJob(recent, 20_000);
+
+    const job = startReelJob(async () => {
+      const out: Record<string, unknown> = { page: page.name, dry_run };
+      const tasks: Promise<void>[] = [];
+      if (platforms.includes("instagram")) tasks.push((async () => {
+        try {
+          const c = await meta.igReelContainer(ig, video_url, instagram_caption || caption, cover_url);
+          // Meta downloads and processes the video; usually 30 s to 2 min
+          let status = "";
+          for (let i = 0; i < 60; i++) {
+            status = (await meta.igContainerStatus(c.id)).status_code;
+            if (status === "FINISHED" || status === "ERROR" || status === "EXPIRED") break;
+            await new Promise((r) => setTimeout(r, 5000));
+          }
+          if (status !== "FINISHED") throw new Error(`Instagram couldn't process the video (status ${status || "unknown"}).`);
+          if (dry_run) { out.instagram = { ready: true, note: "Uploaded and processed by Instagram; not published (dry run)." }; return; }
+          const p = await meta.igPublish(ig, c.id);
+          const info = await meta.igMedia(p.id).catch(() => ({}));
+          const res: Record<string, unknown> = { media_id: p.id, permalink: (info as any).permalink };
+          if (comment) {
+            try { await meta.igComment(p.id, comment); res.first_comment = "posted"; }
+            catch (e) { res.first_comment = `failed: ${(e as Error).message}`; }
+          }
+          out.instagram = res;
+        } catch (e) { out.instagram = { error: (e as Error).message }; }
+      })());
+      if (platforms.includes("facebook")) tasks.push((async () => {
+        try {
+          const st = await meta.fbReelStart(pageId, page.access_token);
+          await meta.fbReelUpload(st.upload_url, page.access_token, video_url);
+          if (dry_run) { out.facebook = { ready: true, note: "Uploaded to Facebook; not published (dry run). The unfinished upload is discarded." }; return; }
+          await meta.fbReelFinish(pageId, page.access_token, st.video_id, caption);
+          const res: Record<string, unknown> = { video_id: st.video_id };
+          // Comments work once Facebook has finished processing the reel
+          for (let i = 0; i < 36; i++) {
+            const v = await meta.fbVideoStatus(st.video_id, page.access_token).catch(() => ({} as any));
+            res.permalink = v.permalink_url ? `https://www.facebook.com${v.permalink_url}` : res.permalink;
+            const vs = v.status?.video_status;
+            if (vs === "ready" || vs === "published" || v.status?.publishing_phase?.status === "complete") break;
+            if (vs === "error") { res.processing = "error"; break; }
+            await new Promise((r) => setTimeout(r, 5000));
+          }
+          if (comment) {
+            try { await meta.fbComment(st.video_id, page.access_token, comment); res.first_comment = "posted"; }
+            catch (e) { res.first_comment = `failed: ${(e as Error).message}`; }
+          }
+          out.facebook = res;
+        } catch (e) { out.facebook = { error: (e as Error).message }; }
+      })());
+      await Promise.all(tasks);
+      return out;
+    }, 1, false, "post");
     reelJobsByKey.set(key, job);
     return await waitForJob(job, 20_000);
   }));

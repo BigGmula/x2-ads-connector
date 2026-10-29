@@ -114,4 +114,41 @@ export const meta = {
     }
     return call("POST", `${igId}/media_publish`, { creation_id: c.id });
   },
+
+  // ----- Reels -----
+  // Instagram: create a REELS container from a public video URL; Meta downloads and processes it
+  igReelContainer: (igId: string, videoUrl: string, caption: string, coverUrl?: string) =>
+    call("POST", `${igId}/media`, { media_type: "REELS", video_url: videoUrl, caption, share_to_feed: true, cover_url: coverUrl }),
+  igContainerStatus: (containerId: string) => call("GET", containerId, { fields: "status_code,status" }),
+  igPublish: (igId: string, containerId: string) => call("POST", `${igId}/media_publish`, { creation_id: containerId }),
+  igMedia: (mediaId: string) => call("GET", mediaId, { fields: "permalink,timestamp" }),
+  igRecentMedia: (igId: string) => call("GET", `${igId}/media`, { fields: "timestamp,media_product_type", limit: 25 }),
+
+  // Facebook Page Reels (page token): start an upload session, have Meta fetch the hosted file, then finish
+  fbReelStart: (pageId: string, pageToken: string) => pageCall("POST", `${pageId}/video_reels`, pageToken, { upload_phase: "start" }),
+  fbReelUpload: async (uploadUrl: string, pageToken: string, fileUrl: string) => {
+    const res = await fetch(uploadUrl, { method: "POST", headers: { Authorization: `OAuth ${pageToken}`, file_url: fileUrl } });
+    const j: any = await res.json().catch(() => ({}));
+    if (!res.ok || j.error || j.success === false) throw new Error(`Facebook Reel upload failed: ${j.error?.message || j.debug_info?.message || res.statusText}`);
+    return j;
+  },
+  fbReelFinish: (pageId: string, pageToken: string, videoId: string, description: string, scheduleUnix?: number) =>
+    pageCall("POST", `${pageId}/video_reels`, pageToken, {
+      upload_phase: "finish", video_id: videoId, description,
+      video_state: scheduleUnix ? "SCHEDULED" : "PUBLISHED", scheduled_publish_time: scheduleUnix,
+    }),
+  fbVideoStatus: (videoId: string, pageToken: string) => pageCall("GET", videoId, pageToken, { fields: "status,permalink_url" }),
 };
+
+// Graph call with a Page access token (Page posting needs the Page's own token, not the system user's)
+async function pageCall(method: "GET" | "POST", path: string, pageToken: string, params: Record<string, unknown> = {}) {
+  const url = new URL(`${BASE}/${path.replace(/^\//, "")}`);
+  const body = new URLSearchParams();
+  const target = method === "GET" ? url.searchParams : body;
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) target.set(k, String(v));
+  target.set("access_token", pageToken);
+  const res = await fetch(url, method === "POST" ? { method, body } : { method });
+  const j: any = await res.json().catch(() => ({}));
+  if (!res.ok || j.error) throw new Error(`Meta API error ${res.status}: ${j.error?.message || res.statusText}${j.error?.error_user_msg ? " — " + j.error.error_user_msg : ""}`);
+  return j;
+}
