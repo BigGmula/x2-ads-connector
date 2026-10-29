@@ -324,7 +324,7 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
         list.push(`outpoint ${durOf(k).toFixed(3)}`);
         const f = `fade${k}.mp4`;
         await runFfmpeg(["-ss", durOf(k).toFixed(3), "-t", T.toFixed(3), "-i", clipFiles[k], "-t", T.toFixed(3), "-i", clipFiles[k + 1],
-          "-filter_complex", `[0:v]settb=AVTB,setpts=PTS-STARTPTS[a];[1:v]settb=AVTB,setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fade:duration=${T}:offset=0,format=yuv420p[v]`,
+          "-filter_complex", `[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=${FPS}[a];[1:v]settb=AVTB,setpts=PTS-STARTPTS,fps=${FPS}[b];[a][b]xfade=transition=fade:duration=${T}:offset=0,format=yuv420p[v]`,
           "-map", "[v]", "-frames:v", String(Math.round(T * FPS)), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-g", "1", "-r", String(FPS), f], dir);
         list.push(`file '${f}'`);
       }
