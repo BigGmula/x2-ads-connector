@@ -64,6 +64,7 @@ const slideSets = async (): Promise<SlideSet[]> => JSON.parse(await readFile(SLI
 // Reel builds run in the background, one at a time (a small server has memory for one build), keyed by job ID
 type ReelJob = { id: string; status: "queued" | "building" | "done" | "failed"; started: number; variants: number; result?: unknown; error?: string; done: Promise<void> };
 const reelJobs = new Map<string, ReelJob>();
+const reelJobsByKey = new Map<string, ReelJob>(); // build settings -> latest job with those settings
 let reelQueue: Promise<unknown> = Promise.resolve();
 function startReelJob(work: () => Promise<unknown>, variants: number): ReelJob {
   const job = { id: `reel_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, status: "queued", started: Date.now(), variants } as ReelJob;
@@ -82,7 +83,7 @@ async function waitForJob(job: ReelJob, ms: number) {
   if (job.status === "failed") throw new Error(`Reel build failed: ${job.error}`);
   return {
     job_id: job.id, status: job.status, elapsed_s: Math.round((Date.now() - job.started) / 1000),
-    next: `Still ${job.status}. Call get_reel with job_id "${job.id}" in about 30-60 s (about 1-2 min per variant in total).`,
+    next: `Still ${job.status}. In about 30-60 s, call get_reel with job_id "${job.id}" (or call build_reel again with the same settings) to get the video. About 1-2 min per variant in total.`,
   };
 }
 
@@ -263,7 +264,7 @@ function buildServer() {
 
   s.registerTool("build_reel", {
     title: "Reels: build a reel video",
-    description: "Build a 9:16 Reel MP4 (14 s, 1080x1920, H.264/AAC) from a product's designed 5-slide set (product_id like P25) or from your own slide image URLs, with royalty-free music. Starts a background build and returns a job_id (status 'queued'/'building'); call get_reel with it until status is 'done', which gives a public video_url (ready for Instagram/Facebook publishing) and a cover image URL. Nothing is posted. Use variants: 2-3 for A/B tests (each gets a different track). About 1-2 minutes per variant.",
+    description: "Build a 9:16 Reel MP4 (14 s, 1080x1920, H.264/AAC) from a product's designed 5-slide set (product_id like P25) or from your own slide image URLs, with royalty-free music. Starts a background build and returns a job_id (status 'queued'/'building'); call get_reel with it (or call build_reel again with the same settings) until status is 'done', which gives a public video_url (ready for Instagram/Facebook publishing) and a cover image URL. Nothing is posted. Use variants: 2-3 for A/B tests (each gets a different track). About 1-2 minutes per variant.",
     inputSchema: {
       product_id: z.string().optional().describe("Product with a Drive slide set, e.g. P25 (see list_reel_products)"),
       slide_urls: z.array(z.string()).min(1).max(8).optional().describe("Or your own slides: public image URLs or Google Drive links (shared 'anyone with the link'), in order"),
@@ -292,6 +293,13 @@ function buildServer() {
     } else tracks = await pickTracks(variants);
 
     if (voiceover && !product) throw new Error("Voiceover scripts are written from the product's details, so give product_id.");
+
+    // Calling again with the same settings returns that build (still running, or finished in the last 30 min)
+    // instead of starting another, so clients that can't see get_reel can still collect the result.
+    const key = JSON.stringify([product?.id || slide_urls, variants, music || "", safe_area, voiceover || "", platform]);
+    const recent = reelJobsByKey.get(key);
+    if (recent && reelJobs.has(recent.id) && (recent.status === "queued" || recent.status === "building" || (recent.status === "done" && Date.now() - recent.started < 30 * 60_000)))
+      return await waitForJob(recent, 20_000);
 
     // Building takes a minute or two on a small server, longer than a tool call should hang, so it runs as a
     // background job. Wait briefly in case it's quick, otherwise hand back the job ID for get_reel.
@@ -322,6 +330,7 @@ function buildServer() {
         await rm(dir, { recursive: true, force: true });
       }
     }, variants);
+    reelJobsByKey.set(key, job);
     return await waitForJob(job, 20_000);
   }));
 
