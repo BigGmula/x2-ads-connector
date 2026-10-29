@@ -7,13 +7,19 @@
 //           Ken Burns motion, optional hook / captions / end card drawn on top.
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm, readdir, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, availableParallelism } from "node:os";
+import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import ffmpegStatic from "ffmpeg-static";
 import { pickVoice, speak, voiceName, wavSeconds } from "./voice.js";
 
 const W = 1080, H = 1920, FPS = 30;
+// Small servers (e.g. Render's 512 MB / 0.5 CPU plan): one filter thread, a faster x264 preset and a lighter
+// supersample for the push-in, so a reel fits in memory and builds in about a minute.
+// Render reports the host's cores, not the plan's, so being on Render (RENDER=true) counts as low power too.
+const LOW_POWER = process.env.REEL_LOW_POWER ? process.env.REEL_LOW_POWER === "true" : process.env.RENDER === "true" || availableParallelism() <= 2;
+const SS = LOW_POWER ? 1.5 : 2; // push-in is rendered at this multiple of 1080x1920, then scaled down (smooth motion)
 const HOOK_SECONDS = 1.5;
 // Timing for a designed 5-slide set: hook, on-model, detail, styled outfit, price + CTA
 export const SET_TIMING = [2.0, 3.0, 2.5, 2.5, 4.0];
@@ -119,7 +125,10 @@ async function fetchInto(dir: string, src: string, name: string, kind: "image" |
 
 function runFfmpeg(args: string[], cwd: string, timeoutMs = 5 * 60_000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const p = spawn(ffmpegBin(), ["-hide_banner", "-loglevel", "error", "-y", ...args], { cwd });
+    // On small servers every decoder gets one thread (by default each starts one per core and buffers frames for them)
+    const a = LOW_POWER ? args.flatMap((x, i) => (x === "-i" && args[i - 1] !== "-threads" ? ["-threads", "1", x] : [x])) : args;
+    if (process.env.REEL_KEEP_TMP) appendFileSync(path.join(cwd, "cmds.jsonl"), JSON.stringify(a) + "\n");
+    const p = spawn(ffmpegBin(), ["-hide_banner", "-loglevel", "error", "-y", ...a], { cwd });
     let err = "";
     const out: Buffer[] = [];
     p.stdout.on("data", (d) => out.push(d));
@@ -137,6 +146,20 @@ function runFfmpeg(args: string[], cwd: string, timeoutMs = 5 * 60_000): Promise
 async function edgeColor(file: string, cwd: string): Promise<string> {
   const px = await runFfmpeg(["-i", file, "-vf", "crop=iw:ih*0.03:0:ih*0.97,scale=1:1:flags=area", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], cwd);
   return px.length >= 3 ? "0x" + [...px.subarray(0, 3)].map((b) => b.toString(16).padStart(2, "0")).join("") : "black";
+}
+
+// Integrated loudness (LUFS) of an audio file; undefined for silence
+async function measureLufs(file: string, cwd: string): Promise<number | undefined> {
+  const out = await new Promise<string>((resolve, reject) => {
+    const p = spawn(ffmpegBin(), ["-hide_banner", "-nostats", "-i", file, "-af", "ebur128", "-f", "null", "-"], { cwd });
+    let err = "";
+    p.stderr.on("data", (d) => { err = (err + d).slice(-6000); });
+    p.on("error", reject);
+    p.on("close", () => resolve(err));
+  });
+  const m = [...out.matchAll(/I:\s+(-?[\d.]+|-inf) LUFS/g)].pop();
+  const v = m ? Number(m[1]) : NaN;
+  return Number.isFinite(v) && v > -70 ? v : undefined;
 }
 
 // Royalty-free tracks the business owns or licenses (default ./music)
@@ -230,37 +253,45 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       return parts.join(",");
     };
 
-    const inputs: string[] = [];
-    const graph: string[] = [];
-    slideFiles.forEach((f) => inputs.push("-i", f));
+    // Each slide (and the end card) is rendered to its own short clip first, one at a time, so only one
+    // slide's frames are ever in memory; the clips are then joined with dissolves in the final pass.
+    const clipFiles: string[] = [];
+    const renderClip = async (clipInputs: string[], filter: string, frames: number) => {
+      const f = `clip${clipFiles.length}.mp4`;
+      await runFfmpeg([...(LOW_POWER ? ["-filter_complex_threads", "1"] : []), ...clipInputs, "-filter_complex", filter, "-map", "[v]",
+        "-frames:v", String(frames), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-g", "1", "-pix_fmt", "yuv420p", "-r", String(FPS),
+        ...(LOW_POWER ? ["-threads", "2"] : []), f], dir);
+      clipFiles.push(f);
+    };
 
     for (let i = 0; i < n; i++) {
       const last = i === n - 1 && !hasEnd;
       const D = dur[i] + (last ? 0 : T), F = Math.round(D * FPS);
+      const pre: string[] = [];
       let base: string;
       if (fit === "fit") {
         // Whole slide, never cropped: fit inside the frame (or the safe area) and pad with its own edge color
         const pad = await edgeColor(slideFiles[i], dir);
         const bh = o.safeArea ? H - SAFE_TOP - SAFE_BOTTOM : H, top = o.safeArea ? SAFE_TOP : 0;
-        base = `[${i}:v]scale=${W}:${bh}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:${top}+(${bh}-ih)/2:color=${pad},setsar=1`;
+        base = `[0:v]scale=${W}:${bh}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:${top}+(${bh}-ih)/2:color=${pad},setsar=1`;
         // Push-in reaches 3%: only the outer padding / edge pixels leave the frame
         base += motion === "none" ? `,zoompan=z='1':d=${F}:s=${W}x${H}:fps=${FPS}`
-          : `,scale=${W * 2}:${H * 2}:flags=lanczos,zoompan=z='1+0.03*(on/${Math.max(F - 1, 1)})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${F}:s=${W}x${H}:fps=${FPS}`;
+          : `,scale=${Math.round(W * SS)}:${Math.round(H * SS)}:flags=lanczos,zoompan=z='1+0.03*(on/${Math.max(F - 1, 1)})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${F}:s=${W}x${H}:fps=${FPS}`;
       } else {
-        graph.push(
-          `[${i}:v]format=rgb24,split[a${i}][b${i}]`,
-          `[a${i}]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,boxblur=20:2,eq=brightness=-0.18,scale=${W * 2}:${H * 2}[bg${i}]`,
-          `[b${i}]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=decrease[fg${i}]`,
+        pre.push(
+          `[0:v]format=rgb24,split[a][b]`,
+          `[a]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,boxblur=20:2,eq=brightness=-0.18,scale=${W * 2}:${H * 2}[bg]`,
+          `[b]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=decrease[fg]`,
         );
         const z = motion === "none" ? "z='1'" : motion === "push" ? `z='1+0.03*(on/${Math.max(F - 1, 1)})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` : kenBurns(i, F);
-        base = `[bg${i}][fg${i}]overlay=(W-w)/2:(H-h)/2,zoompan=${z}:d=${F}:s=${W}x${H}:fps=${FPS},setsar=1`;
+        base = `[bg][fg]overlay=(W-w)/2:(H-h)/2,zoompan=${z}:d=${F}:s=${W}x${H}:fps=${FPS},setsar=1`;
       }
       const texts: string[] = [];
       // Text sits above and below the photo (over the darkened backdrop), never on the product itself
       if (i === 0 && o.hook) texts.push(await caption(o.hook, { size: 150, maxChars: 12, yCenter: H * 0.15, start: 0.1 }));
       const t = o.slides[i].text;
       if (t) texts.push(await caption(t, { size: 92, maxChars: 16, yCenter: H * (o.safeArea ? 0.7 : 0.8), start: 0.25 }));
-      graph.push(`${base},format=yuv420p${texts.length ? "," + texts.join(",") : ""},settb=AVTB[v${i}]`);
+      await renderClip(["-i", slideFiles[i]], [...pre, `${base},format=yuv420p${texts.length ? "," + texts.join(",") : ""}[v]`].join(";"), F);
     }
 
     // Optional end card: logo, shop URL, discount code, CTA
@@ -270,42 +301,57 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       if (ec.shopUrl) parts.push(await caption(`Shop ${ec.shopUrl}`, { size: 88, maxChars: 20, yCenter: H * 0.53, start: 0.2 }));
       if (ec.code) parts.push(await caption(`Code ${ec.code}`, { size: 80, maxChars: 22, yCenter: H * 0.62, start: 0.45, color: "0x4D7CFF" }));
       if (ec.cta) parts.push(await caption(ec.cta, { size: 60, maxChars: 20, yCenter: H * 0.71, start: 0.7, color: brand.highlight }));
-      graph.push(`color=c=${brand.background}:s=${W}x${H}:r=${FPS}:d=${E},format=yuv420p[ecbg]`);
+      const g = [`color=c=${brand.background}:s=${W}x${H}:r=${FPS}:d=${E},format=yuv420p[ecbg]`];
       let ecIn = "ecbg";
       if (logoFile) {
-        inputs.push("-loop", "1", "-t", String(E), "-i", logoFile);
-        graph.push(`[${n}:v]scale=720:480:force_original_aspect_ratio=decrease,format=rgba[logo]`, `[ecbg][logo]overlay=(W-w)/2:${Math.round(H * 0.2)}:shortest=1[eclogo]`);
+        g.push(`[0:v]scale=720:480:force_original_aspect_ratio=decrease,format=rgba[logo]`, `[ecbg][logo]overlay=(W-w)/2:${Math.round(H * 0.2)}:shortest=1[eclogo]`);
         ecIn = "eclogo";
       }
-      graph.push(`[${ecIn}]${parts.length ? parts.join(",") + "," : ""}setsar=1,fps=${FPS},settb=AVTB[v${n}]`);
+      g.push(`[${ecIn}]${parts.length ? parts.join(",") + "," : ""}setsar=1,fps=${FPS},format=yuv420p[v]`);
+      await renderClip(logoFile ? ["-loop", "1", "-t", String(E), "-i", logoFile] : [], g.join(";"), Math.round(E * FPS));
     }
 
-    // Join clips with short dissolves; each starts when the previous slide's time is up
-    const clips = n + (hasEnd ? 1 : 0);
-    let prev = "v0", at = 0;
-    for (let k = 0; k < clips - 1; k++) {
-      at += dur[k];
-      const out = k === clips - 2 ? "vout" : `x${k}`;
-      graph.push(`[${prev}][v${k + 1}]xfade=transition=fade:duration=${T}:offset=${at.toFixed(3)}[${out}]`);
-      prev = out;
+    // Join with short dissolves without holding every clip in memory: each dissolve is rendered as its own tiny
+    // clip from the two neighbours, then all pieces are played end to end (clip0, fade, clip1, fade, ...).
+    // Clips are all-intra, so the concat in/out points are frame-exact.
+    const clips = clipFiles.length;
+    const list: string[] = [];
+    const durOf = (k: number) => (k < n ? dur[k] : E);
+    for (let k = 0; k < clips; k++) {
+      list.push(`file '${clipFiles[k]}'`);
+      if (k > 0) list.push(`inpoint ${T.toFixed(3)}`);
+      if (k < clips - 1) {
+        list.push(`outpoint ${durOf(k).toFixed(3)}`);
+        const f = `fade${k}.mp4`;
+        await runFfmpeg(["-ss", durOf(k).toFixed(3), "-t", T.toFixed(3), "-i", clipFiles[k], "-t", T.toFixed(3), "-i", clipFiles[k + 1],
+          "-filter_complex", `[0:v]settb=AVTB,setpts=PTS-STARTPTS[a];[1:v]settb=AVTB,setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fade:duration=${T}:offset=0,format=yuv420p[v]`,
+          "-map", "[v]", "-frames:v", String(Math.round(T * FPS)), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-g", "1", "-r", String(FPS), f], dir);
+        list.push(`file '${f}'`);
+      }
     }
-    if (clips === 1) graph.push(`[v0]null[vout]`);
+    await writeFile(path.join(dir, "clips.txt"), list.join("\n") + "\n");
 
-    // Audio: the track trimmed to length and faded; silence if no track. Everything ends loudness-normalized
-    // (Instagram plays around -14 LUFS) and limited so phones never clip.
-    const nextInput = () => inputs.filter((a) => a === "-i").length;
-    const finish = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,alimiter=limit=0.79:level=false,aformat=channel_layouts=stereo";
+    // Audio is mixed in its own small steps. Loudness is measured (ebur128) and corrected with a fixed gain
+    // instead of loudnorm, which needs ~120 MB per instance. Final mix lands around -14 LUFS (where Instagram
+    // plays) and is limited so phones never clip.
+    const STEREO = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
+    const gainTo = async (file: string, target: number) => {
+      const I = await measureLufs(file, dir);
+      return I === undefined ? 0 : Math.max(-20, Math.min(20, target - I));
+    };
     const vo = o.voiceover?.trim() || "";
     const voice = vo ? o.voice || pickVoice() : undefined;
+
+    // Music bed: the track trimmed to length and faded; silence if no track
     if (musicFile) {
       const start = o.musicStart ?? (await autoMusicStart(musicFile, dir, total));
-      const ai = nextInput();
-      inputs.push("-stream_loop", "-1", "-ss", start.toFixed(2), "-i", musicFile);
-      graph.push(`[${ai}:a]atrim=0:${total},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,afade=t=out:st=${Math.max(total - 1.2, 0)}:d=1.2,` +
-        (vo.length ? "loudnorm=I=-20:TP=-2:LRA=11,aresample=48000,aformat=channel_layouts=stereo[mus]" : `${finish}[aout]`));
+      await runFfmpeg(["-stream_loop", "-1", "-ss", start.toFixed(2), "-i", musicFile, "-af",
+        `atrim=0:${total},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,afade=t=out:st=${Math.max(total - 1.2, 0)}:d=1.2,${STEREO}`,
+        "-c:a", "pcm_f32le", "mus.wav"], dir);
     } else {
-      graph.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}${vo.length ? "[mus]" : "[aout]"}`);
+      await runFfmpeg(["-f", "lavfi", "-i", `anullsrc=r=48000:cl=stereo`, "-t", String(total), "-c:a", "pcm_f32le", "mus.wav"], dir);
     }
+    let mixFile = "mus.wav";
 
     // Voiceover: the whole script recorded as ONE continuous take, so it flows like a real voice actor's read.
     // It starts just after the reel opens and is sped up only if it would run past the end (at most 1.12x,
@@ -318,21 +364,26 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       const START = 0.3, room = total - START - 0.45;
       const tempo = secs > room ? secs / room : 1;
       if (tempo > 1.12) throw new Error(`The voiceover runs ${secs.toFixed(1)}s, too long for a ${total}s reel. Shorten the script.`);
-      const vi = nextInput(), ms = Math.round(START * 1000);
-      inputs.push("-i", "vo.wav");
-      graph.push(
-        `[${vi}:a]aresample=48000,aformat=channel_layouts=stereo${tempo > 1.001 ? `,atempo=${tempo.toFixed(3)}` : ""},adelay=${ms}|${ms},` +
-          `apad,atrim=0:${total},highpass=f=90,loudnorm=I=-15:TP=-2:LRA=7,aresample=48000,asplit[voa][vob]`,
-        `[mus][voa]sidechaincompress=threshold=0.012:ratio=10:attack=15:release=450:makeup=1[duck]`,
-        `[duck][vob]amix=inputs=2:normalize=0:duration=first,${finish}[aout]`,
-      );
+      const ms = Math.round(START * 1000);
+      await runFfmpeg(["-i", "vo.wav", "-af", `${STEREO}${tempo > 1.001 ? `,atempo=${tempo.toFixed(3)}` : ""},adelay=${ms}|${ms},apad,atrim=0:${total},highpass=f=90`,
+        "-c:a", "pcm_f32le", "vop.wav"], dir);
+      const gm = await gainTo("mus.wav", -20), gv = await gainTo("vop.wav", -15);
+      await runFfmpeg(["-i", "mus.wav", "-i", "vop.wav", "-filter_complex",
+        `[0:a]volume=${gm.toFixed(2)}dB[mus];[1:a]volume=${gv.toFixed(2)}dB,asplit[voa][vob];` +
+        `[mus][voa]sidechaincompress=threshold=0.012:ratio=10:attack=15:release=450:makeup=1[duck];` +
+        `[duck][vob]amix=inputs=2:normalize=0:duration=first,${STEREO}[a]`,
+        "-map", "[a]", "-c:a", "pcm_f32le", "mix.wav"], dir);
+      mixFile = "mix.wav";
     }
+    const gf = musicFile || vo.length ? await gainTo(mixFile, -14) : 0;
 
     await runFfmpeg([
-      ...inputs,
-      "-filter_complex", graph.join(";\n"),
+      ...(LOW_POWER ? ["-filter_complex_threads", "1"] : []),
+      "-f", "concat", "-safe", "0", "-i", "clips.txt", "-i", mixFile,
+      "-filter_complex", `[0:v]settb=AVTB,setsar=1,fps=${FPS},format=yuv420p[vout];[1:a]volume=${gf.toFixed(2)}dB,alimiter=limit=0.79:level=false,${STEREO}[aout]`,
       "-map", "[vout]", "-map", "[aout]",
-      "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-profile:v", "high", "-level", "4.1", "-pix_fmt", "yuv420p", "-r", String(FPS),
+      "-c:v", "libx264", "-preset", LOW_POWER ? "veryfast" : "medium", "-crf", "18", "-profile:v", "high", "-level", "4.1", "-pix_fmt", "yuv420p", "-r", String(FPS),
+      ...(LOW_POWER ? ["-threads", "2", "-x264-params", "rc-lookahead=10"] : []),
       "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
       "-t", String(total), "-movflags", "+faststart", outPath,
     ], dir);
@@ -341,7 +392,8 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
     await runFfmpeg(["-ss", fit === "fit" ? "0.5" : "0.8", "-i", outPath, "-frames:v", "1", "-q:v", "2", cover], dir);
     return { path: outPath, cover, duration: total, slides: n, ...(voice ? { voice: voiceName(voice) } : {}) };
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    if (process.env.REEL_KEEP_TMP) console.error(`kept ${dir}`);
+    else await rm(dir, { recursive: true, force: true });
   }
 }
 

@@ -61,6 +61,31 @@ type SlideSet = { id: string; town: string; title: string; url: string; price_la
 const SLIDE_SETS = process.env.SLIDE_SETS_FILE || "reels/slide-sets.json";
 const slideSets = async (): Promise<SlideSet[]> => JSON.parse(await readFile(SLIDE_SETS, "utf8")).products;
 
+// Reel builds run in the background, one at a time (a small server has memory for one build), keyed by job ID
+type ReelJob = { id: string; status: "queued" | "building" | "done" | "failed"; started: number; variants: number; result?: unknown; error?: string; done: Promise<void> };
+const reelJobs = new Map<string, ReelJob>();
+let reelQueue: Promise<unknown> = Promise.resolve();
+function startReelJob(work: () => Promise<unknown>, variants: number): ReelJob {
+  const job = { id: `reel_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, status: "queued", started: Date.now(), variants } as ReelJob;
+  job.done = (reelQueue = reelQueue.then(async () => {
+    job.status = "building";
+    try { job.result = await work(); job.status = "done"; }
+    catch (e) { job.status = "failed"; job.error = (e as Error).message; console.error(`reel ${job.id} failed:`, e); }
+  })).then(() => {});
+  reelJobs.set(job.id, job);
+  for (const [id, j] of reelJobs) if (reelJobs.size > 50 && j.status !== "queued" && j.status !== "building") reelJobs.delete(id);
+  return job;
+}
+async function waitForJob(job: ReelJob, ms: number) {
+  await Promise.race([job.done, new Promise((r) => setTimeout(r, ms))]);
+  if (job.status === "done") return { job_id: job.id, status: "done", ...(job.result as object) };
+  if (job.status === "failed") throw new Error(`Reel build failed: ${job.error}`);
+  return {
+    job_id: job.id, status: job.status, elapsed_s: Math.round((Date.now() - job.started) / 1000),
+    next: `Still ${job.status}. Call get_reel with job_id "${job.id}" in about 30-60 s (about 1-2 min per variant in total).`,
+  };
+}
+
 // ---------- Tools ----------
 function buildServer() {
   const s = new McpServer({ name: "x2-ads-connector", version: "1.0.0" });
@@ -238,7 +263,7 @@ function buildServer() {
 
   s.registerTool("build_reel", {
     title: "Reels: build a reel video",
-    description: "Build a 9:16 Reel MP4 (14 s, 1080x1920, H.264/AAC) from a product's designed 5-slide set (product_id like P25) or from your own slide image URLs, with royalty-free music. Returns a public video_url (ready for Instagram/Facebook publishing) and a cover image URL. Nothing is posted. Use variants: 2-3 for A/B tests (each gets a different track). Takes about 15-60 s per variant.",
+    description: "Build a 9:16 Reel MP4 (14 s, 1080x1920, H.264/AAC) from a product's designed 5-slide set (product_id like P25) or from your own slide image URLs, with royalty-free music. Starts a background build and returns a job_id (status 'queued'/'building'); call get_reel with it until status is 'done', which gives a public video_url (ready for Instagram/Facebook publishing) and a cover image URL. Nothing is posted. Use variants: 2-3 for A/B tests (each gets a different track). About 1-2 minutes per variant.",
     inputSchema: {
       product_id: z.string().optional().describe("Product with a Drive slide set, e.g. P25 (see list_reel_products)"),
       slide_urls: z.array(z.string()).min(1).max(8).optional().describe("Or your own slides: public image URLs or Google Drive links (shared 'anyone with the link'), in order"),
@@ -267,31 +292,47 @@ function buildServer() {
     } else tracks = await pickTracks(variants);
 
     if (voiceover && !product) throw new Error("Voiceover scripts are written from the product's details, so give product_id.");
-    const dir = await mkdtemp(path.join(tmpdir(), "reels-"));
-    try {
-      const out = [];
-      for (let i = 0; i < variants; i++) {
-        const script = voiceover ? await fillScript(product!, voiceover, platform) : undefined;
-        const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.text, outPath: path.join(dir, `reel-${i}.mp4`) });
-        out.push({
-          variant: String.fromCharCode(65 + i),
-          video_url: await hostFile(r.path),
-          cover_url: await hostFile(r.cover),
-          duration_s: r.duration,
-          music: tracks[i] ? path.basename(tracks[i]!) : "none",
-          ...(script ? { voiceover_angle: script.angle, voiceover_voice: r.voice, voiceover_script: script.text } : {}),
-        });
+
+    // Building takes a minute or two on a small server, longer than a tool call should hang, so it runs as a
+    // background job. Wait briefly in case it's quick, otherwise hand back the job ID for get_reel.
+    const job = startReelJob(async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), "reels-"));
+      try {
+        const out = [];
+        for (let i = 0; i < variants; i++) {
+          const script = voiceover ? await fillScript(product!, voiceover, platform) : undefined;
+          const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.text, outPath: path.join(dir, `reel-${i}.mp4`) });
+          out.push({
+            variant: String.fromCharCode(65 + i),
+            video_url: await hostFile(r.path),
+            cover_url: await hostFile(r.cover),
+            duration_s: r.duration,
+            music: tracks[i] ? path.basename(tracks[i]!) : "none",
+            ...(script ? { voiceover_angle: script.angle, voiceover_voice: r.voice, voiceover_script: script.text } : {}),
+          });
+        }
+        return {
+          product: product && { id: product.id, town: product.town, title: product.title, url: product.url, price_label: product.price_label },
+          ...(product?.hold ? { warning: `${product.id} is on HOLD (${product.status}). Don't publish it until Glen releases it.` } : {}),
+          reels: out,
+          note: "Not posted. Check that the price and offer on the last slide still match checkout before publishing." +
+            (voiceover ? " The voice is AI-generated: turn on the platform's AI-content label when publishing." : ""),
+        };
+      } finally {
+        await rm(dir, { recursive: true, force: true });
       }
-      return {
-        product: product && { id: product.id, town: product.town, title: product.title, url: product.url, price_label: product.price_label },
-        ...(product?.hold ? { warning: `${product.id} is on HOLD (${product.status}). Don't publish it until Glen releases it.` } : {}),
-        reels: out,
-        note: "Not posted. Check that the price and offer on the last slide still match checkout before publishing." +
-          (voiceover ? " The voice is AI-generated: turn on the platform's AI-content label when publishing." : ""),
-      };
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    }, variants);
+    return await waitForJob(job, 20_000);
+  }));
+
+  s.registerTool("get_reel", {
+    title: "Reels: check a reel build",
+    description: "Check a reel build started by build_reel. Returns status 'queued', 'building', 'done' (with the video and cover URLs) or 'failed' (with the reason). Builds take about 1-2 minutes per variant; check again every 30-60 s until done.",
+    inputSchema: { job_id: z.string() },
+  }, wrap(async ({ job_id }: any) => {
+    const job = reelJobs.get(String(job_id));
+    if (!job) throw new Error(`No reel build ${job_id}. Builds are forgotten after a server restart; start a new one with build_reel.`);
+    return await waitForJob(job, 15_000);
   }));
 
   // ===== GOOGLE =====
