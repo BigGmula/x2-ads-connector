@@ -279,7 +279,7 @@ function buildServer() {
           cover_url: await hostFile(r.cover),
           duration_s: r.duration,
           music: tracks[i] ? path.basename(tracks[i]!) : "none",
-          ...(script ? { voiceover_angle: script.angle, voiceover_script: script.lines.join(" ") } : {}),
+          ...(script ? { voiceover_angle: script.angle, voiceover_voice: r.voice, voiceover_script: script.lines.join(" ") } : {}),
         });
       }
       return {

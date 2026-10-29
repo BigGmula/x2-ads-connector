@@ -59,7 +59,7 @@ if (args[0].endsWith(".json")) {
       const mine = tracks.slice(i * Math.max(angles.length, 1), (i + 1) * Math.max(angles.length, 1));
       const rs = await buildReelVariants({ slides: p.slides.map((id) => ({ src: `drive:${id}` })) }, [], mine, path.resolve("reels/out"), name, Math.max(angles.length, 1), scripts.map((s) => s.lines));
       for (const [k, r] of rs.entries())
-        console.log(`${p.id} ${p.town}: ${path.basename(r.path)} (${r.duration}s) music=${path.basename(r.music || "none")}${scripts[k] ? ` vo=${scripts[k].angle}` : ""}`);
+        console.log(`${p.id} ${p.town}: ${path.basename(r.path)} (${r.duration}s) music=${path.basename(r.music || "none")}${scripts[k] ? ` vo=${scripts[k].angle} voice=${r.voice}` : ""}`);
     } catch (e) {
       console.log(`${p.id} ${p.town}: FAILED ${(e as Error).message.slice(0, 300)}`);
     }

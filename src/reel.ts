@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import ffmpegStatic from "ffmpeg-static";
-import { speak, wavSeconds } from "./voice.js";
+import { pickVoice, speak, voiceName, wavSeconds } from "./voice.js";
 
 const W = 1080, H = 1920, FPS = 30;
 const HOOK_SECONDS = 1.5;
@@ -43,14 +43,14 @@ export type ReelOptions = {
   music?: string;               // URL or local path to a track the business owns or licenses
   musicStart?: number;          // seconds into the track to start; default: where the beat is in full swing
   voiceover?: string[];         // script lines to speak, placed on the slide changes; the music dips under the voice
-  voice?: string;               // text-to-speech voice name (Google); default GOOGLE_TTS_VOICE or a warm female voice
+  voice?: string;               // ElevenLabs voice ID or name (zara, brielle, lyan); default: one from the rotation
   secondsPerSlide?: number;     // for slides without their own `seconds`; a 5-slide fit set uses SET_TIMING
   endCardSeconds?: number;      // default 3
   outPath: string;              // where to write the .mp4 (a cover .jpg is written beside it)
   brand?: Partial<Brand>;
 };
 
-export type ReelResult = { path: string; cover: string; duration: number; slides: number };
+export type ReelResult = { path: string; cover: string; duration: number; slides: number; voice?: string };
 
 // ---------- helpers ----------
 const ffmpegBin = () => {
@@ -296,6 +296,7 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
     const nextInput = () => inputs.filter((a) => a === "-i").length;
     const finish = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,alimiter=limit=0.79:level=false,aformat=channel_layouts=stereo";
     const vo = o.voiceover?.filter((l) => l.trim()) || [];
+    const voice = vo.length ? o.voice || pickVoice() : undefined; // one voice for the whole read
     if (musicFile) {
       const start = o.musicStart ?? (await autoMusicStart(musicFile, dir, total));
       const ai = nextInput();
@@ -313,7 +314,7 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       // Speak each line, then trim the silence voices pad around it so lines land right on their slide
       const secs: number[] = [];
       for (const [k, line] of vo.entries()) {
-        await speak(line, path.join(dir, `raw${k}.wav`), o.voice);
+        await speak(line, path.join(dir, `raw${k}.wav`), voice, { previous: vo.slice(0, k).join(" "), next: vo.slice(k + 1).join(" ") });
         const trim = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03";
         await runFfmpeg(["-i", `raw${k}.wav`, "-af", `${trim},areverse,${trim},areverse`, "-c:a", "pcm_s16le", `vo${k}.wav`], dir);
         secs.push(wavSeconds(await readFile(path.join(dir, `vo${k}.wav`))));
@@ -362,7 +363,7 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
 
     // Cover = first slide (the hook / hero) for previews and the Instagram cover
     await runFfmpeg(["-ss", fit === "fit" ? "0.5" : "0.8", "-i", outPath, "-frames:v", "1", "-q:v", "2", cover], dir);
-    return { path: outPath, cover, duration: total, slides: n };
+    return { path: outPath, cover, duration: total, slides: n, ...(voice ? { voice: voiceName(voice) } : {}) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

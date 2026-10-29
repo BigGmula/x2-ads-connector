@@ -1,14 +1,31 @@
 // Text-to-speech for reel voiceovers.
-//  - google:  Google Cloud Text-to-Speech (set GOOGLE_TTS_API_KEY; voice via GOOGLE_TTS_VOICE)
-//  - windows: the built-in Windows voice, for testing timing and the mix locally (TTS_PROVIDER=windows)
+//  - elevenlabs: ElevenLabs (set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID). Lines are read with the
+//                surrounding script as context, so the take sounds like one voice actor's read.
+//  - windows:    the built-in Windows voice, for testing timing and the mix locally (TTS_PROVIDER=windows)
 import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 
-const DEFAULT_VOICE = "en-US-Chirp3-HD-Aoede"; // warm, natural female voice
+// Hyper-natural female voices from the ElevenLabs library, picked for women's apparel ads (young women + moms).
+// Reels rotate between them so the performance report shows which one sells; override with ELEVENLABS_VOICE_IDS.
+export const VOICES: Record<string, string> = {
+  zara: "jqcCZkN6Knx8BJ5TBdYR",    // warm, real-world conversationalist, 20s-30s
+  brielle: "6u6JbqKdaQy89ENzLSju", // natural Gen Z, "un-clockable"
+  lyan: "PStJ2DzQnh8zxG5PDf1s",    // genuine, casual DTC ad read
+};
+const DEFAULT_MODEL = "eleven_multilingual_v2";
 
-export function ttsProvider(): "google" | "windows" | undefined {
-  const p = (process.env.TTS_PROVIDER || (process.env.GOOGLE_TTS_API_KEY ? "google" : "")).toLowerCase();
-  return p === "google" || p === "windows" ? p : undefined;
+// Voice IDs in rotation: ELEVENLABS_VOICE_IDS (comma-separated IDs or names above), else all of VOICES
+export function voicePool(): string[] {
+  const env = (process.env.ELEVENLABS_VOICE_IDS || process.env.ELEVENLABS_VOICE_ID || "").split(",").map((v) => v.trim()).filter(Boolean);
+  return (env.length ? env : Object.keys(VOICES)).map((v) => VOICES[v.toLowerCase()] || v);
+}
+export const pickVoice = () => { const p = voicePool(); return p[Math.floor(Math.random() * p.length)]; };
+export const voiceName = (id: string) => Object.keys(VOICES).find((k) => VOICES[k] === id) || id;
+const RATE = 24000;
+
+export function ttsProvider(): "elevenlabs" | "windows" | undefined {
+  const p = (process.env.TTS_PROVIDER || (process.env.ELEVENLABS_API_KEY ? "elevenlabs" : "")).toLowerCase();
+  return p === "elevenlabs" || p === "windows" ? p : undefined;
 }
 
 // Length of a PCM .wav in seconds (reads the fmt byte rate and the data chunk size)
@@ -22,22 +39,45 @@ export function wavSeconds(buf: Buffer): number {
   throw new Error("Not a PCM wav file.");
 }
 
-async function google(text: string, outFile: string, voice?: string) {
-  const key = process.env.GOOGLE_TTS_API_KEY;
-  if (!key) throw new Error("GOOGLE_TTS_API_KEY is not set. See SETUP.md (Voiceovers).");
-  const name = voice || process.env.GOOGLE_TTS_VOICE || DEFAULT_VOICE;
-  const res = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(key)}`, {
+// Wrap raw 16-bit mono PCM in a .wav header
+function wav(pcm: Buffer, rate = RATE): Buffer {
+  const h = Buffer.alloc(44);
+  h.write("RIFF", 0); h.writeUInt32LE(36 + pcm.length, 4); h.write("WAVE", 8);
+  h.write("fmt ", 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+  h.write("data", 36); h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+
+export type SpeakContext = { previous?: string; next?: string };
+
+async function elevenlabs(text: string, outFile: string, voice?: string, ctx: SpeakContext = {}) {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) throw new Error("ELEVENLABS_API_KEY is not set. See SETUP.md (Voiceovers).");
+  const id = VOICES[(voice || "").toLowerCase()] || voice || voicePool()[0];
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(id)}?output_format=pcm_${RATE}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "xi-api-key": key, "Content-Type": "application/json", Accept: "audio/pcm" },
     body: JSON.stringify({
-      input: { text },
-      voice: { languageCode: name.split("-").slice(0, 2).join("-"), name },
-      audioConfig: { audioEncoding: "LINEAR16", sampleRateHertz: 24000, speakingRate: Number(process.env.GOOGLE_TTS_RATE || 1.05) },
+      text,
+      model_id: process.env.ELEVENLABS_MODEL || DEFAULT_MODEL,
+      // The rest of the script, so each line keeps the same voice, energy and flow as one continuous read
+      previous_text: ctx.previous || undefined,
+      next_text: ctx.next || undefined,
+      voice_settings: {
+        stability: Number(process.env.ELEVENLABS_STABILITY || 0.4),
+        similarity_boost: 0.8,
+        style: Number(process.env.ELEVENLABS_STYLE || 0.35),
+        use_speaker_boost: true,
+      },
     }),
   });
-  const j: any = await res.json().catch(() => ({}));
-  if (!res.ok || !j.audioContent) throw new Error(`Google text-to-speech failed (${res.status}): ${j.error?.message || res.statusText}`);
-  await writeFile(outFile, Buffer.from(j.audioContent, "base64"));
+  if (!res.ok) {
+    const j: any = await res.json().catch(() => ({}));
+    const msg = j.detail?.message || j.detail?.status || (typeof j.detail === "string" ? j.detail : "") || res.statusText;
+    throw new Error(`ElevenLabs failed (${res.status}): ${msg}${res.status === 404 || /voice/i.test(msg) ? " (add the voice to My Voices in ElevenLabs first)" : ""}`);
+  }
+  await writeFile(outFile, wav(Buffer.from(await res.arrayBuffer())));
 }
 
 function windows(text: string, outFile: string) {
@@ -54,10 +94,10 @@ function windows(text: string, outFile: string) {
 }
 
 // Speak one line into a .wav; returns its length in seconds
-export async function speak(text: string, outFile: string, voice?: string): Promise<number> {
+export async function speak(text: string, outFile: string, voice?: string, ctx?: SpeakContext): Promise<number> {
   const p = ttsProvider();
-  if (!p) throw new Error("No voice is set up. Set GOOGLE_TTS_API_KEY (see SETUP.md, Voiceovers) or TTS_PROVIDER=windows for local tests.");
-  if (p === "google") await google(text, outFile, voice);
+  if (!p) throw new Error("No voice is set up. Set ELEVENLABS_API_KEY (see SETUP.md, Voiceovers) or TTS_PROVIDER=windows for local tests.");
+  if (p === "elevenlabs") await elevenlabs(text, outFile, voice, ctx);
   else await windows(text, outFile);
   return wavSeconds(await readFile(outFile));
 }
