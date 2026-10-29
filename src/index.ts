@@ -10,6 +10,7 @@ import { meta, actId } from "./meta.js";
 import { google, cid } from "./google.js";
 import { buildReel, listTracks, pickTracks } from "./reel.js";
 import { hostFile, mediaRoutes } from "./hosting.js";
+import { fillScript } from "./scripts.js";
 
 // ---------- Safety rails ----------
 const READ_ONLY = (process.env.ADS_READ_ONLY || "false").toLowerCase() === "true";
@@ -244,8 +245,10 @@ function buildServer() {
       variants: z.number().int().min(1).max(3).default(1),
       music: z.string().optional().describe("Track file name from the music folder (e.g. baileys.mp3), or 'none' for silent. Default: random track per variant"),
       safe_area: z.boolean().default(false).describe("Shrink slides so Instagram's caption and buttons never cover the slide's CTA"),
+      voiceover: z.string().optional().describe("Add a female voiceover with the music dipped under it: a script angle (town-callout, direct-question, moms-gift, new-drop, outfit-solved), 'random' (a different angle per variant), or leave empty for music only. Needs product_id."),
+      platform: z.enum(["instagram", "facebook"]).default("instagram").describe("Where it will post; sets the spoken call to action (link in bio vs tap the link)"),
     },
-  }, wrap(async ({ product_id, slide_urls, variants, music, safe_area }: any) => {
+  }, wrap(async ({ product_id, slide_urls, variants, music, safe_area, voiceover, platform }: any) => {
     let product: SlideSet | undefined;
     let slides: string[];
     if (product_id) {
@@ -263,24 +266,28 @@ function buildServer() {
       tracks = Array(variants).fill(t);
     } else tracks = await pickTracks(variants);
 
+    if (voiceover && !product) throw new Error("Voiceover scripts are written from the product's details, so give product_id.");
     const dir = await mkdtemp(path.join(tmpdir(), "reels-"));
     try {
       const out = [];
       for (let i = 0; i < variants; i++) {
-        const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, outPath: path.join(dir, `reel-${i}.mp4`) });
+        const script = voiceover ? await fillScript(product!, voiceover, platform) : undefined;
+        const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.lines, outPath: path.join(dir, `reel-${i}.mp4`) });
         out.push({
           variant: String.fromCharCode(65 + i),
           video_url: await hostFile(r.path),
           cover_url: await hostFile(r.cover),
           duration_s: r.duration,
           music: tracks[i] ? path.basename(tracks[i]!) : "none",
+          ...(script ? { voiceover_angle: script.angle, voiceover_script: script.lines.join(" ") } : {}),
         });
       }
       return {
         product: product && { id: product.id, town: product.town, title: product.title, url: product.url, price_label: product.price_label },
         ...(product?.hold ? { warning: `${product.id} is on HOLD (${product.status}). Don't publish it until Glen releases it.` } : {}),
         reels: out,
-        note: "Not posted. Check that the price and offer on the last slide still match checkout before publishing.",
+        note: "Not posted. Check that the price and offer on the last slide still match checkout before publishing." +
+          (voiceover ? " The voice is AI-generated: turn on the platform's AI-content label when publishing." : ""),
       };
     } finally {
       await rm(dir, { recursive: true, force: true });

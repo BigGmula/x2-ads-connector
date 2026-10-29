@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import ffmpegStatic from "ffmpeg-static";
+import { speak, wavSeconds } from "./voice.js";
 
 const W = 1080, H = 1920, FPS = 30;
 const HOOK_SECONDS = 1.5;
@@ -41,6 +42,8 @@ export type ReelOptions = {
   endCard?: { logo?: string; shopUrl?: string; code?: string; cta?: string };
   music?: string;               // URL or local path to a track the business owns or licenses
   musicStart?: number;          // seconds into the track to start; default: where the beat is in full swing
+  voiceover?: string[];         // script lines to speak, placed on the slide changes; the music dips under the voice
+  voice?: string;               // text-to-speech voice name (Google); default GOOGLE_TTS_VOICE or a warm female voice
   secondsPerSlide?: number;     // for slides without their own `seconds`; a 5-slide fit set uses SET_TIMING
   endCardSeconds?: number;      // default 3
   outPath: string;              // where to write the .mp4 (a cover .jpg is written beside it)
@@ -288,14 +291,64 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
     }
     if (clips === 1) graph.push(`[v0]null[vout]`);
 
-    // Audio: the track trimmed to length, faded, loudness-normalized (Instagram plays around -14 LUFS); silence if no track
+    // Audio: the track trimmed to length and faded; silence if no track. Everything ends loudness-normalized
+    // (Instagram plays around -14 LUFS) and limited so phones never clip.
+    const nextInput = () => inputs.filter((a) => a === "-i").length;
+    const finish = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,alimiter=limit=0.79:level=false,aformat=channel_layouts=stereo";
+    const vo = o.voiceover?.filter((l) => l.trim()) || [];
     if (musicFile) {
       const start = o.musicStart ?? (await autoMusicStart(musicFile, dir, total));
+      const ai = nextInput();
       inputs.push("-stream_loop", "-1", "-ss", start.toFixed(2), "-i", musicFile);
-      const ai = inputs.filter((a) => a === "-i").length - 1;
-      graph.push(`[${ai}:a]atrim=0:${total},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,afade=t=out:st=${Math.max(total - 1.2, 0)}:d=1.2,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,alimiter=limit=0.79:level=false,aformat=channel_layouts=stereo[aout]`);
+      graph.push(`[${ai}:a]atrim=0:${total},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,afade=t=out:st=${Math.max(total - 1.2, 0)}:d=1.2,` +
+        (vo.length ? "loudnorm=I=-20:TP=-2:LRA=11,aresample=48000,aformat=channel_layouts=stereo[mus]" : `${finish}[aout]`));
     } else {
-      graph.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}[aout]`);
+      graph.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}${vo.length ? "[mus]" : "[aout]"}`);
+    }
+
+    // Voiceover: each line starts on its slide (for a 5-slide set: hook on S01, product on S02, styling on S04,
+    // price + CTA on S05), never overlapping; sped up slightly only if the script would run past the end.
+    // The music ducks under the voice and comes back between lines.
+    if (vo.length) {
+      // Speak each line, then trim the silence voices pad around it so lines land right on their slide
+      const secs: number[] = [];
+      for (const [k, line] of vo.entries()) {
+        await speak(line, path.join(dir, `raw${k}.wav`), o.voice);
+        const trim = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03";
+        await runFfmpeg(["-i", `raw${k}.wav`, "-af", `${trim},areverse,${trim},areverse`, "-c:a", "pcm_s16le", `vo${k}.wav`], dir);
+        secs.push(wavSeconds(await readFile(path.join(dir, `vo${k}.wav`))));
+      }
+      const slideStart = dur.map((_, i) => dur.slice(0, i).reduce((a, b) => a + b, 0));
+      const slots = useSet && vo.length === 4 ? [0.25, slideStart[1] + 0.1, slideStart[3] + 0.1, slideStart[4] + 0.15]
+        : vo.map((_, k) => (k === 0 ? 0.25 : slideStart[Math.round((k * n) / vo.length)] + 0.1));
+      const GAP = 0.12, end = total - 0.35;
+      // On its slide if it fits; otherwise lines run back to back, and only then a touch faster (at most 1.25x)
+      const pack = (tempo: number, onSlides: boolean) => {
+        const at: number[] = [];
+        let t = 0;
+        for (const [k, s] of secs.entries()) { at.push(Math.max(onSlides || !k ? slots[k] : 0, t + (k ? GAP : 0))); t = at[k] + s / tempo; }
+        return { at, last: t };
+      };
+      let tempo = 1, plan = pack(1, true);
+      if (plan.last > end) plan = pack(1, false);
+      if (plan.last > end) {
+        tempo = (secs.reduce((a, b) => a + b, 0) + GAP * (secs.length - 1)) / (end - slots[0]);
+        if (tempo > 1.25) throw new Error(`The voiceover runs ${(secs.reduce((a, b) => a + b, 0)).toFixed(1)}s, too long for a ${total}s reel. Shorten the script.`);
+        plan = pack(tempo, false);
+      }
+      const labels: string[] = [];
+      for (const [k] of vo.entries()) {
+        const vi = nextInput();
+        inputs.push("-i", `vo${k}.wav`);
+        const ms = Math.round(plan.at[k] * 1000);
+        graph.push(`[${vi}:a]aresample=48000,aformat=channel_layouts=stereo${tempo > 1.001 ? `,atempo=${tempo.toFixed(3)}` : ""},adelay=${ms}|${ms}[vo${k}]`);
+        labels.push(`[vo${k}]`);
+      }
+      graph.push(
+        `${labels.join("")}amix=inputs=${labels.length}:normalize=0:duration=longest,apad,atrim=0:${total},highpass=f=90,loudnorm=I=-15:TP=-2:LRA=7,aresample=48000,asplit[voa][vob]`,
+        `[mus][voa]sidechaincompress=threshold=0.012:ratio=10:attack=15:release=450:makeup=1[duck]`,
+        `[duck][vob]amix=inputs=2:normalize=0:duration=first,${finish}[aout]`,
+      );
     }
 
     await runFfmpeg([
@@ -316,15 +369,16 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
 }
 
 // 2-3 variants for A/B testing: each pairs a different hook with a different track
-export async function buildReelVariants(base: Omit<ReelOptions, "hook" | "music" | "outPath">, hooks: (string | undefined)[], tracks: (string | undefined)[], outDir: string, name: string, max = 3) {
+export async function buildReelVariants(base: Omit<ReelOptions, "hook" | "music" | "outPath" | "voiceover">, hooks: (string | undefined)[], tracks: (string | undefined)[], outDir: string, name: string, max = 3, voiceovers: (string[] | undefined)[] = []) {
   const hs = hooks.length ? hooks : [undefined];
-  const count = Math.min(max, Math.max(hs.length, tracks.length || 1));
+  const count = Math.min(max, Math.max(hs.length, tracks.length || 1, voiceovers.length));
   const results: (ReelResult & { variant: string; hook?: string; music?: string })[] = [];
   for (let i = 0; i < count; i++) {
     const variant = String.fromCharCode(65 + i);
     const hook = hs[i % hs.length], music = tracks.length ? tracks[i % tracks.length] : undefined;
+    const voiceover = voiceovers.length ? voiceovers[i % voiceovers.length] : undefined;
     const file = count === 1 ? `${name}.mp4` : `${name}-${variant}.mp4`;
-    const r = await buildReel({ ...base, hook, music, outPath: path.join(outDir, file) });
+    const r = await buildReel({ ...base, hook, music, voiceover, outPath: path.join(outDir, file) });
     results.push({ ...r, variant, hook, music });
   }
   return results;

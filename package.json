@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "reel": "tsx src/reel-cli.ts"
+    "reel": "node --env-file-if-exists=.env --import tsx src/reel-cli.ts"
   },
   "author": "",
   "license": "ISC",

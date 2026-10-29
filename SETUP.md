@@ -74,6 +74,18 @@ cp .env.example .env   # fill in values
 npm run build && node --env-file=.env dist/index.js
 ```
 
+## Step 5 — Voiceovers (optional, ~10 min)
+
+Reels can have a woman's voice reading a short script (from `reels/voiceover-scripts.json`) with the music dipped underneath. It uses Google Cloud Text-to-Speech; the free monthly allowance covers hundreds of reels.
+
+1. **console.cloud.google.com** → pick the same project you made for Google Ads (or any project). Billing must be turned on for the project, even to use the free allowance.
+2. **APIs & Services → Library** → search **Cloud Text-to-Speech API** → **Enable**.
+3. **APIs & Services → Credentials → Create credentials → API key**. Click the new key → **API restrictions → Restrict key → Cloud Text-to-Speech API** → Save.
+4. Put the key in `GOOGLE_TTS_API_KEY` (in Render's environment variables, and in a local `.env` file to build reels on your computer).
+
+Try it locally: `npm run reel -- P25 --vo each` builds one version per script angle into `reels/out`.
+The voice is AI-generated, so turn on the platform's AI-content label when posting.
+
 ## Notes
 
 - **Credit repair ads on Meta**: set `special_ad_categories` to `FINANCIAL_PRODUCTS_SERVICES`. Meta rejects credit-related ads without it, and it limits age/zip targeting.
