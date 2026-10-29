@@ -1,0 +1,63 @@
+{
+  "notes": [
+    "Voiceover scripts for the 14 s designed slide reels. Each line is timed to a slide: S01 hook 0-2 s, S02-S03 product 2-7.5 s, S04 styling 7.5-10 s, S05 price + CTA 10-14 s.",
+    "Max ~32 words so a natural female read fits with the music dipped underneath.",
+    "Placeholders: {town}, {team} (town + mascot, e.g. 'Connetquot T-Birds'), {product} (e.g. 'heritage script crop hoodie'), {price} ('starting at fifty-four ninety-nine' for a price range, 'just fifty-four ninety-nine' for one price), {cta}.",
+    "Rules from the 47 Swag Co playbook: no delivery-date promises, no live-preview language, no fake social proof or scarcity. Don't speak coupon codes (offers change; the S05 slide shows them).",
+    "CTA: Facebook comments hold a clickable product link; on Instagram say 'link in bio'. Use cta_facebook / cta_instagram."
+  ],
+  "cta_facebook": "Tap the link to shop.",
+  "cta_instagram": "Shop it at the link in bio.",
+  "angles": [
+    {
+      "id": "town-callout",
+      "why": "Calls out the viewer's identity in the first second (local pride). Meta: put the brand and key message in the first 3 seconds.",
+      "lines": [
+        "{town}, this one's for you.",
+        "Your new {product} is here.",
+        "Cropped, cozy, and made for game day.",
+        "{Price}. {cta}"
+      ]
+    },
+    {
+      "id": "direct-question",
+      "why": "Direct-question hook, one of the three hook types clothing-brand Reel guides recommend.",
+      "lines": [
+        "Need a new game-day fit?",
+        "Meet the {town} {product}.",
+        "Throw it on with jeans and you're done.",
+        "{Price}. {cta}"
+      ]
+    },
+    {
+      "id": "moms-gift",
+      "why": "Speaks to the buyer (moms shopping for daughters), matching the MOMS offer on the S05 slides.",
+      "lines": [
+        "Moms, she's going to live in this.",
+        "The {team} {product}.",
+        "Soft, cropped, all school pride.",
+        "{Price}. {cta}"
+      ]
+    },
+    {
+      "id": "new-drop",
+      "why": "Announcement hook: the product and 'now available' land in the first 3 seconds.",
+      "lines": [
+        "Just dropped for {town}.",
+        "The {product}, now available.",
+        "Style it your way, every day.",
+        "{Price}. {cta}"
+      ]
+    },
+    {
+      "id": "outfit-solved",
+      "why": "Problem/solution hook: names an everyday problem, then shows the fix.",
+      "lines": [
+        "Nothing to wear? Fixed.",
+        "The {town} {product}.",
+        "Cute with jeans, leggings, anything.",
+        "{Price}. {cta}"
+      ]
+    }
+  ]
+}
