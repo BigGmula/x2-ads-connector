@@ -1,0 +1,38 @@
+{
+  "notes": [
+    "Voiceover scripts for the 14 s slide reels, written the way a real person talks to a friend: contractions, short sentences, natural pauses (... and ?). Recorded as ONE continuous take so it flows like a voice actor's read.",
+    "Keep each under ~32 words so it fits 14 s at a relaxed pace with the music dipped underneath.",
+    "Placeholders: {town}, {team} (town + mascot), {product} (e.g. 'heritage script crop hoodie'), {price} (e.g. 'And it's under fifty-five bucks!'), {cta}.",
+    "Rules from the 47 Swag Co playbook: no delivery-date promises, no live-preview language, no fake social proof or scarcity. Don't speak coupon codes (offers change; the last slide shows them).",
+    "CTA: on Facebook the product link is in the comments; on Instagram it's in the bio."
+  ],
+  "cta_facebook": "Link's in the comments.",
+  "cta_instagram": "Link's in our bio.",
+  "angles": [
+    {
+      "id": "town-callout",
+      "why": "Calls out the viewer's identity in the first second (local pride). Meta: put the brand and key message in the first 3 seconds.",
+      "text": "Okay {town}... this one's for you. Our new {product} just dropped. It's cropped, it's cozy, and it's perfect for game day. {price} {cta}"
+    },
+    {
+      "id": "direct-question",
+      "why": "Direct-question hook, one of the three hook types clothing-brand Reel guides recommend.",
+      "text": "Need a new game-day fit? Meet the {town} crop hoodie. Throw it on with your favorite jeans and you're good to go. {price} {cta}"
+    },
+    {
+      "id": "moms-gift",
+      "why": "Speaks to the buyer (moms shopping for daughters), matching the MOMS offer on the last slide.",
+      "text": "Moms... she is going to live in this. The {town} crop hoodie. It's soft, it's cropped, and it's full of school pride. Grab her one! {cta}"
+    },
+    {
+      "id": "new-drop",
+      "why": "Announcement hook: the product and 'now available' land in the first 3 seconds.",
+      "text": "Just dropped for {town}! Our new {product} is finally here... and honestly? It goes with everything. {price} {cta}"
+    },
+    {
+      "id": "outfit-solved",
+      "why": "Problem/solution hook: names an everyday problem, then shows the fix.",
+      "text": "Nothing to wear? Fixed. The {town} crop hoodie goes with jeans, leggings... literally everything. {price} {cta}"
+    }
+  ]
+}

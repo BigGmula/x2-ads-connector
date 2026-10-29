@@ -3,8 +3,14 @@ import { timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { meta, actId } from "./meta.js";
 import { google, cid } from "./google.js";
+import { buildReel, listTracks, pickTracks } from "./reel.js";
+import { hostFile, mediaRoutes } from "./hosting.js";
+import { fillScript } from "./scripts.js";
 
 // ---------- Safety rails ----------
 const READ_ONLY = (process.env.ADS_READ_ONLY || "false").toLowerCase() === "true";
@@ -50,12 +56,17 @@ function tidyGoogleCampaign(r: any) {
   };
 }
 
+// Designed 5-slide reel sets in Google Drive, indexed by product ID (P01...)
+type SlideSet = { id: string; town: string; title: string; url: string; price_label: string; hold: boolean; status: string; slides: string[] };
+const SLIDE_SETS = process.env.SLIDE_SETS_FILE || "reels/slide-sets.json";
+const slideSets = async (): Promise<SlideSet[]> => JSON.parse(await readFile(SLIDE_SETS, "utf8")).products;
+
 // ---------- Tools ----------
 function buildServer() {
   const s = new McpServer({ name: "x2-ads-connector", version: "1.0.0" });
 
   // Tag every tool read-only vs write so Claude (and the directory) know which ones change things
-  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords"]);
+  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords", "build_reel"]);
   const reg = s.registerTool.bind(s) as any;
   (s as any).registerTool = (name: string, cfg: any, cb: any) =>
     reg(name, { ...cfg, annotations: { title: cfg.title, readOnlyHint: !WRITES.has(name), destructiveHint: false, openWorldHint: true } }, cb);
@@ -213,6 +224,76 @@ function buildServer() {
     return out;
   }));
 
+  // ===== REELS =====
+  s.registerTool("list_reel_products", {
+    title: "Reels: list products with slide sets",
+    description: "List the products that have a designed 5-slide reel set in Google Drive: product ID (P01...), town, title, shop URL, price label, and whether publishing is on HOLD. Optionally filter by town.",
+    inputSchema: { town: z.string().optional() },
+  }, wrap(async ({ town }: any) => {
+    const sets = await slideSets();
+    return sets
+      .filter((p) => !town || p.town.toLowerCase().includes(String(town).toLowerCase()))
+      .map(({ slides, ...p }) => ({ ...p, slide_count: slides.length }));
+  }));
+
+  s.registerTool("build_reel", {
+    title: "Reels: build a reel video",
+    description: "Build a 9:16 Reel MP4 (14 s, 1080x1920, H.264/AAC) from a product's designed 5-slide set (product_id like P25) or from your own slide image URLs, with royalty-free music. Returns a public video_url (ready for Instagram/Facebook publishing) and a cover image URL. Nothing is posted. Use variants: 2-3 for A/B tests (each gets a different track). Takes about 15-60 s per variant.",
+    inputSchema: {
+      product_id: z.string().optional().describe("Product with a Drive slide set, e.g. P25 (see list_reel_products)"),
+      slide_urls: z.array(z.string()).min(1).max(8).optional().describe("Or your own slides: public image URLs or Google Drive links (shared 'anyone with the link'), in order"),
+      variants: z.number().int().min(1).max(3).default(1),
+      music: z.string().optional().describe("Track file name from the music folder (e.g. baileys.mp3), or 'none' for silent. Default: random track per variant"),
+      safe_area: z.boolean().default(false).describe("Shrink slides so Instagram's caption and buttons never cover the slide's CTA"),
+      voiceover: z.string().optional().describe("Add a female voiceover with the music dipped under it: a script angle (town-callout, direct-question, moms-gift, new-drop, outfit-solved), 'random' (a different angle per variant), or leave empty for music only. Needs product_id."),
+      platform: z.enum(["instagram", "facebook"]).default("instagram").describe("Where it will post; sets the spoken call to action (link in bio vs tap the link)"),
+    },
+  }, wrap(async ({ product_id, slide_urls, variants, music, safe_area, voiceover, platform }: any) => {
+    let product: SlideSet | undefined;
+    let slides: string[];
+    if (product_id) {
+      product = (await slideSets()).find((p) => p.id.toUpperCase() === String(product_id).trim().toUpperCase());
+      if (!product) throw new Error(`No slide set for ${product_id}. Use list_reel_products to see the IDs.`);
+      slides = product.slides.map((id) => `drive:${id}`);
+    } else if (slide_urls?.length) slides = slide_urls;
+    else throw new Error("Give product_id or slide_urls.");
+
+    let tracks: (string | undefined)[];
+    if (music === "none") tracks = Array(variants).fill(undefined);
+    else if (music) {
+      const t = (await listTracks()).find((f) => path.basename(f).toLowerCase() === String(music).toLowerCase());
+      if (!t) throw new Error(`Track ${music} not found. Available: ${(await listTracks()).map((f) => path.basename(f)).join(", ")}`);
+      tracks = Array(variants).fill(t);
+    } else tracks = await pickTracks(variants);
+
+    if (voiceover && !product) throw new Error("Voiceover scripts are written from the product's details, so give product_id.");
+    const dir = await mkdtemp(path.join(tmpdir(), "reels-"));
+    try {
+      const out = [];
+      for (let i = 0; i < variants; i++) {
+        const script = voiceover ? await fillScript(product!, voiceover, platform) : undefined;
+        const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.text, outPath: path.join(dir, `reel-${i}.mp4`) });
+        out.push({
+          variant: String.fromCharCode(65 + i),
+          video_url: await hostFile(r.path),
+          cover_url: await hostFile(r.cover),
+          duration_s: r.duration,
+          music: tracks[i] ? path.basename(tracks[i]!) : "none",
+          ...(script ? { voiceover_angle: script.angle, voiceover_voice: r.voice, voiceover_script: script.text } : {}),
+        });
+      }
+      return {
+        product: product && { id: product.id, town: product.town, title: product.title, url: product.url, price_label: product.price_label },
+        ...(product?.hold ? { warning: `${product.id} is on HOLD (${product.status}). Don't publish it until Glen releases it.` } : {}),
+        reels: out,
+        note: "Not posted. Check that the price and offer on the last slide still match checkout before publishing." +
+          (voiceover ? " The voice is AI-generated: turn on the platform's AI-content label when publishing." : ""),
+      };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }));
+
   // ===== GOOGLE =====
   s.registerTool("google_list_accounts", {
     title: "Google Ads: list accounts",
@@ -368,6 +449,7 @@ const app = express();
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/", (_req, res) => res.send("x2 ads connector is running."));
+mediaRoutes(app);
 
 app.post("/mcp/:secret", async (req, res) => {
   if (!secretOk(req.params.secret)) return res.status(404).end();
