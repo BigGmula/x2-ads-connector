@@ -272,14 +272,14 @@ function buildServer() {
       const out = [];
       for (let i = 0; i < variants; i++) {
         const script = voiceover ? await fillScript(product!, voiceover, platform) : undefined;
-        const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.lines, outPath: path.join(dir, `reel-${i}.mp4`) });
+        const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.text, outPath: path.join(dir, `reel-${i}.mp4`) });
         out.push({
           variant: String.fromCharCode(65 + i),
           video_url: await hostFile(r.path),
           cover_url: await hostFile(r.cover),
           duration_s: r.duration,
           music: tracks[i] ? path.basename(tracks[i]!) : "none",
-          ...(script ? { voiceover_angle: script.angle, voiceover_voice: r.voice, voiceover_script: script.lines.join(" ") } : {}),
+          ...(script ? { voiceover_angle: script.angle, voiceover_voice: r.voice, voiceover_script: script.text } : {}),
         });
       }
       return {

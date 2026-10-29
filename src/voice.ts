@@ -1,6 +1,5 @@
 // Text-to-speech for reel voiceovers.
-//  - elevenlabs: ElevenLabs (set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID). Lines are read with the
-//                surrounding script as context, so the take sounds like one voice actor's read.
+//  - elevenlabs: ElevenLabs (set ELEVENLABS_API_KEY; voices rotate, see VOICES), newest expressive model
 //  - windows:    the built-in Windows voice, for testing timing and the mix locally (TTS_PROVIDER=windows)
 import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
@@ -12,7 +11,7 @@ export const VOICES: Record<string, string> = {
   brielle: "6u6JbqKdaQy89ENzLSju", // natural Gen Z, "un-clockable"
   lyan: "PStJ2DzQnh8zxG5PDf1s",    // genuine, casual DTC ad read
 };
-const DEFAULT_MODEL = "eleven_multilingual_v2";
+const DEFAULT_MODEL = "eleven_v4"; // newest, most human-sounding ElevenLabs model
 
 // Voice IDs in rotation: ELEVENLABS_VOICE_IDS (comma-separated IDs or names above), else all of VOICES
 export function voicePool(): string[] {
@@ -55,21 +54,19 @@ async function elevenlabs(text: string, outFile: string, voice?: string, ctx: Sp
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key) throw new Error("ELEVENLABS_API_KEY is not set. See SETUP.md (Voiceovers).");
   const id = VOICES[(voice || "").toLowerCase()] || voice || voicePool()[0];
+  const model = process.env.ELEVENLABS_MODEL || DEFAULT_MODEL;
   const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(id)}?output_format=pcm_${RATE}`, {
     method: "POST",
     headers: { "xi-api-key": key, "Content-Type": "application/json", Accept: "audio/pcm" },
     body: JSON.stringify({
       text,
-      model_id: process.env.ELEVENLABS_MODEL || DEFAULT_MODEL,
-      // The rest of the script, so each line keeps the same voice, energy and flow as one continuous read
+      model_id: model,
       previous_text: ctx.previous || undefined,
       next_text: ctx.next || undefined,
-      voice_settings: {
-        stability: Number(process.env.ELEVENLABS_STABILITY || 0.4),
-        similarity_boost: 0.8,
-        style: Number(process.env.ELEVENLABS_STYLE || 0.35),
-        use_speaker_boost: true,
-      },
+      // v3+ models are expressive by design and take stability 0 (creative), 0.5 (natural) or 1 (robust)
+      voice_settings: /eleven_v[3-9]/.test(model)
+        ? { stability: Number(process.env.ELEVENLABS_STABILITY || 0.5) }
+        : { stability: 0.4, similarity_boost: 0.8, style: 0.35, use_speaker_boost: true },
     }),
   });
   if (!res.ok) {

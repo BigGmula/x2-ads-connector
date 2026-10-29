@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 
 export type Platform = "instagram" | "facebook";
-type Angle = { id: string; why: string; lines: string[] };
+type Angle = { id: string; why: string; text: string };
 type ScriptFile = { cta_facebook: string; cta_instagram: string; angles: Angle[] };
 
 const FILE = process.env.VOICEOVER_SCRIPTS_FILE || "reels/voiceover-scripts.json";
@@ -21,18 +21,19 @@ function words(n: number): string {
   return `${ONES[Math.floor(n / 100)]} hundred${n % 100 ? " " + words(n % 100) : ""}`;
 }
 
-// "From $54.99" -> "starting at fifty-four ninety-nine"; "$54.99" -> "just fifty-four ninety-nine"
+// Said the way people say prices: "$54.99" -> "And it's under fifty-five bucks!",
+// "From $54.99" -> "And it starts under fifty-five bucks!", "$60" -> "And it's just sixty bucks!"
 export function spokenPrice(label: string): string {
   const m = label.match(/\$(\d+)(?:\.(\d{2}))?/);
   if (!m) return "";
   const dollars = Number(m[1]), cents = Number(m[2] || 0);
-  const said = cents ? `${words(dollars)} ${cents < 10 ? "oh " + words(cents) : words(cents)}` : `${words(dollars)} dollars`;
-  return (/^\s*from/i.test(label) ? "starting at " : "just ") + said;
+  const amount = cents >= 90 ? `under ${words(dollars + 1)} bucks` : cents ? `${words(dollars)} ${words(cents)}` : `just ${words(dollars)} bucks`;
+  return /^\s*from/i.test(label) ? `And it starts ${amount.replace(/^just /, "at ")}!` : `And it's ${amount}!`;
 }
 
 export type ScriptProduct = { town: string; title: string; price_label: string };
 
-// Lines for one angle ("random" picks one); returns the angle used and its lines
+// One continuous script for an angle ("random" picks one)
 export async function fillScript(p: ScriptProduct, angle: string, platform: Platform = "instagram") {
   const f = await load();
   const a = angle === "random" ? f.angles[Math.floor(Math.random() * f.angles.length)] : f.angles.find((x) => x.id === angle);
@@ -40,11 +41,10 @@ export async function fillScript(p: ScriptProduct, angle: string, platform: Plat
   const team = p.title.match(/^(.*?)\s+(?:Women's|Men's|Youth|Unisex)\b/)?.[1] || p.town;
   const style = /collegiate/i.test(p.title) ? "collegiate script " : /heritage/i.test(p.title) ? "heritage script " : "";
   const garment = /crop hoodie/i.test(p.title) ? "crop hoodie" : /hoodie/i.test(p.title) ? "hoodie" : /tee|t-shirt/i.test(p.title) ? "tee" : "piece";
-  const price = spokenPrice(p.price_label);
   const vars: Record<string, string> = {
-    town: p.town, team, product: style + garment,
-    Price: price ? price[0].toUpperCase() + price.slice(1) : "Shop now",
+    town: p.town, team, product: style + garment, price: spokenPrice(p.price_label),
     cta: platform === "facebook" ? f.cta_facebook : f.cta_instagram,
   };
-  return { angle: a.id, lines: a.lines.map((l) => l.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "")) };
+  const text = a.text.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "").replace(/\s+/g, " ").trim();
+  return { angle: a.id, text };
 }
