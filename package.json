@@ -6,13 +6,16 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "reel": "tsx src/reel-cli.ts"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@expo-google-fonts/anton": "^0.4.2",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "express": "^5.3.0",
+    "ffmpeg-static": "^5.3.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
