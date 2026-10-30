@@ -38,6 +38,8 @@ export async function cleanupMedia(): Promise<number> {
 
 export function mediaRoutes(app: express.Express) {
   app.use("/media", express.static(MEDIA_DIR, { fallthrough: false, index: false, dotfiles: "deny", maxAge: "7d", immutable: true }));
+  // Finished creative committed to the repo (reels/published), kept across deploys
+  app.use("/published", express.static(path.resolve("reels/published"), { fallthrough: false, index: false, dotfiles: "deny", maxAge: "1d" }));
   cleanupMedia().catch(() => {});
   setInterval(() => cleanupMedia().catch(() => {}), 6 * 3_600_000).unref();
 }
