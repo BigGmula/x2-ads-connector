@@ -395,7 +395,7 @@ function buildServer() {
     if (!dry_run) {
       // Daily cap (counted on Instagram, Eastern time) so the account isn't flagged for posting too much
       const cap = Number(process.env.MAX_DAILY_POSTS || 2);
-      if (ig) {
+      if (ig && platforms.includes("instagram")) {
         const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
         const posted = ((await meta.igRecentMedia(ig)).data || []).filter((m: any) => new Date(m.timestamp).toLocaleDateString("en-CA", { timeZone: "America/New_York" }) === today).length;
         if (posted >= cap) throw new Error(`Refused: ${posted} posts already today on Instagram (cap ${cap}, MAX_DAILY_POSTS). Try tomorrow or raise the cap.`);
