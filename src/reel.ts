@@ -50,6 +50,7 @@ export type ReelOptions = {
   musicStart?: number;          // seconds into the track to start; default: where the beat is in full swing
   voiceover?: string;           // script to speak as one continuous take; the music dips under the voice
   voice?: string;               // ElevenLabs voice ID or name (zara, brielle, lyan); default: one from the rotation
+  voiceoverAudio?: string;      // a voiceover already recorded (.wav), used instead of speaking `voiceover`
   secondsPerSlide?: number;     // for slides without their own `seconds`; a 5-slide fit set uses SET_TIMING
   endCardSeconds?: number;      // default 3
   outPath: string;              // where to write the .mp4 (a cover .jpg is written beside it)
@@ -339,8 +340,8 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       const I = await measureLufs(file, dir);
       return I === undefined ? 0 : Math.max(-20, Math.min(20, target - I));
     };
-    const vo = o.voiceover?.trim() || "";
-    const voice = vo ? o.voice || pickVoice() : undefined;
+    const vo = o.voiceover?.trim() || (o.voiceoverAudio ? "(recorded)" : "");
+    const voice = o.voiceover?.trim() ? o.voice || pickVoice() : undefined;
 
     // Music bed: the track trimmed to length and faded; silence if no track
     if (musicFile) {
@@ -357,7 +358,8 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
     // It starts just after the reel opens and is sped up only if it would run past the end (at most 1.12x,
     // beyond that it starts sounding rushed). The music ducks under the voice.
     if (vo.length) {
-      await speak(vo, path.join(dir, "raw.wav"), voice);
+      if (o.voiceoverAudio) await copyFile(path.resolve(o.voiceoverAudio), path.join(dir, "raw.wav"));
+      else await speak(vo, path.join(dir, "raw.wav"), voice);
       const trim = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03";
       await runFfmpeg(["-i", "raw.wav", "-af", `${trim},areverse,${trim},areverse`, "-c:a", "pcm_s16le", "vo.wav"], dir);
       const secs = wavSeconds(await readFile(path.join(dir, "vo.wav")));

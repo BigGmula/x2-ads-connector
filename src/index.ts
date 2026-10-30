@@ -3,12 +3,12 @@ import { timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { meta, actId } from "./meta.js";
 import { google, cid } from "./google.js";
-import { buildReel, listTracks, pickTracks } from "./reel.js";
+import { buildReel, listTracks, pickTracks, driveDownloadUrl } from "./reel.js";
 import { hostFile, mediaRoutes } from "./hosting.js";
 import { fillScript } from "./scripts.js";
 
@@ -60,6 +60,26 @@ function tidyGoogleCampaign(r: any) {
 type SlideSet = { id: string; town: string; title: string; url: string; price_label: string; hold: boolean; status: string; slides: string[] };
 const SLIDE_SETS = process.env.SLIDE_SETS_FILE || "reels/slide-sets.json";
 const slideSets = async (): Promise<SlideSet[]> => JSON.parse(await readFile(SLIDE_SETS, "utf8")).products;
+
+// Copy a Google Drive file (shared "anyone with the link") onto this server and return its public URL;
+// any other URL is returned unchanged
+async function rehostDrive(url: string): Promise<string> {
+  const direct = driveDownloadUrl(url);
+  if (!direct) return url;
+  const res = await fetch(direct);
+  const type = res.headers.get("content-type") || "";
+  if (!res.ok || type.startsWith("text/")) throw new Error(`Couldn't download ${url} from Google Drive. Share it as "Anyone with the link" (viewer).`);
+  const ext = type.includes("mp4") || type.startsWith("video/") ? ".mp4" : type.includes("png") ? ".png" : type.includes("jpeg") || type.includes("jpg") ? ".jpg" : "";
+  if (!ext) throw new Error(`${url} isn't a video or image (got ${type}).`);
+  const dir = await mkdtemp(path.join(tmpdir(), "drive-"));
+  try {
+    const file = path.join(dir, `file${ext}`);
+    await writeFile(file, Buffer.from(await res.arrayBuffer()));
+    return await hostFile(file);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
 // Reel builds run in the background, one at a time (a small server has memory for one build), keyed by job ID
 type ReelJob = { id: string; status: "queued" | "building" | "done" | "failed"; started: number; variants: number; result?: unknown; error?: string; done: Promise<void> };
@@ -347,8 +367,8 @@ function buildServer() {
       "The first comment is the bare product URL only (from product_id). Products on HOLD are refused. A daily cap (MAX_DAILY_POSTS, default 2) blocks extra posts. " +
       "Runs in the background: returns a job_id; call publish_reel again with the same settings (or get_reel with the job_id) until status is 'done'. The voiceover is AI-generated: turn on the AI-content label in the app if required.",
     inputSchema: {
-      video_url: z.string().url().describe("Public MP4 URL from build_reel"),
-      cover_url: z.string().url().optional().describe("Cover image URL from build_reel (Instagram cover)"),
+      video_url: z.string().url().describe("MP4 from build_reel, or a Google Drive link to an MP4 shared 'anyone with the link' (copied onto this server first)"),
+      cover_url: z.string().url().optional().describe("Cover image from build_reel or a shared Google Drive link (Instagram cover)"),
       caption: z.string().min(1).max(2200).describe("Facebook caption (also used for Instagram unless instagram_caption is given)"),
       instagram_caption: z.string().max(2200).optional(),
       product_id: z.string().optional().describe("P01...; used for the first comment (product URL) and the HOLD check"),
@@ -389,10 +409,13 @@ function buildServer() {
 
     const job = startReelJob(async () => {
       const out: Record<string, unknown> = { page: page.name, dry_run };
+      // Google Drive links are copied onto this server first: Meta needs a direct, public file URL
+      const video = await rehostDrive(video_url), cover = cover_url ? await rehostDrive(cover_url) : undefined;
+      if (video !== video_url) out.hosted_video_url = video;
       const tasks: Promise<void>[] = [];
       if (platforms.includes("instagram")) tasks.push((async () => {
         try {
-          const c = await meta.igReelContainer(ig, video_url, instagram_caption || caption, cover_url);
+          const c = await meta.igReelContainer(ig, video, instagram_caption || caption, cover);
           // Meta downloads and processes the video; usually 30 s to 2 min
           let status = "";
           for (let i = 0; i < 60; i++) {
@@ -415,7 +438,7 @@ function buildServer() {
       if (platforms.includes("facebook")) tasks.push((async () => {
         try {
           const st = await meta.fbReelStart(pageId, page.access_token);
-          await meta.fbReelUpload(st.upload_url, page.access_token, video_url);
+          await meta.fbReelUpload(st.upload_url, page.access_token, video);
           if (dry_run) { out.facebook = { ready: true, note: "Uploaded to Facebook; not published (dry run). The unfinished upload is discarded." }; return; }
           await meta.fbReelFinish(pageId, page.access_token, st.video_id, caption);
           const res: Record<string, unknown> = { video_id: st.video_id };
