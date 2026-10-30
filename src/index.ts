@@ -364,7 +364,7 @@ function buildServer() {
       "Publish a finished reel (video_url from build_reel) to Instagram Reels and/or Facebook Page Reels, then post the product link as the first comment. " +
       "Posting is public: show the user the caption, platforms and video first, and only call with confirm: true after they approve. dry_run: true uploads and checks everything on Meta's side but posts nothing. " +
       "Copy rules (47 Swag Co): lead with the town, then the offer; Instagram caption ends with 'Link in bio' (links aren't clickable there); Facebook can carry the full shop link; no delivery-date promises. " +
-      "The first comment is the bare product URL only (from product_id). Products on HOLD are refused. A daily cap (MAX_DAILY_POSTS, default 2) blocks extra posts. " +
+      "The first comment is the bare product URL only (from product_id). Products on HOLD are refused. No daily cap unless MAX_DAILY_POSTS is set. " +
       "Runs in the background: returns a job_id; call publish_reel again with the same settings (or get_reel with the job_id) until status is 'done'. The voiceover is AI-generated: turn on the AI-content label in the app if required.",
     inputSchema: {
       video_url: z.string().url().describe("MP4 from build_reel, or a Google Drive link to an MP4 shared 'anyone with the link' (copied onto this server first)"),
@@ -393,9 +393,9 @@ function buildServer() {
     if (platforms.includes("instagram") && !ig) throw new Error("No Instagram professional account is linked to this Page.");
 
     if (!dry_run) {
-      // Daily cap (counted on Instagram, Eastern time) so the account isn't flagged for posting too much
-      const cap = Number(process.env.MAX_DAILY_POSTS || 2);
-      if (ig && platforms.includes("instagram")) {
+      // Optional daily cap (counted on Instagram, Eastern time); off unless MAX_DAILY_POSTS is set
+      const cap = Number(process.env.MAX_DAILY_POSTS || 0);
+      if (cap > 0 && ig && platforms.includes("instagram")) {
         const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
         const posted = ((await meta.igRecentMedia(ig)).data || []).filter((m: any) => new Date(m.timestamp).toLocaleDateString("en-CA", { timeZone: "America/New_York" }) === today).length;
         if (posted >= cap) throw new Error(`Refused: ${posted} posts already today on Instagram (cap ${cap}, MAX_DAILY_POSTS). Try tomorrow or raise the cap.`);
