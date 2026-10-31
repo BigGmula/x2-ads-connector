@@ -1,0 +1,96 @@
+{
+  "name": "47 Swag Co - Search - Long Island",
+  "daily_budget": 20,
+  "max_cpc": 3,
+  "locations": ["Nassau County, NY", "Suffolk County, NY"],
+  "negative_keywords": ["free", "cheap", "diy", "jobs", "wholesale blanks"],
+  "negative_match_type": "PHRASE",
+  "ad_groups": [
+    {
+      "name": "Custom Hats",
+      "max_cpc": 2.5,
+      "match_type": "PHRASE",
+      "keywords": [
+        "custom hats long island", "custom embroidered hats", "custom hats", "embroidered hats long island",
+        "custom logo hats", "custom snapback hats", "custom trucker hats", "custom hats near me"
+      ],
+      "final_url": "https://47swagco.com/products/100-custom-hats-bundle-50-beanies-50-snapbacks",
+      "path1": "custom", "path2": "hats",
+      "headlines": [
+        "Custom Hats on Long Island", "Custom Embroidered Hats", "Your Logo on Premium Hats", "Snapbacks, Truckers & More",
+        "Local Long Island Print Shop", "Bulk Hat Bundles Available", "47 Swag Co Custom Hats", "Teams, Businesses & Schools",
+        "Order Custom Hats Online"
+      ],
+      "descriptions": [
+        "Custom embroidered hats for teams, businesses and schools. Designed on Long Island.",
+        "Snapbacks, truckers and beanies with your logo. Bulk bundles for crews and events.",
+        "Shop 47 Swag Co for premium custom headwear. Order online today."
+      ]
+    },
+    {
+      "name": "Custom Beanies",
+      "max_cpc": 2,
+      "match_type": "PHRASE",
+      "keywords": [
+        "custom beanies", "custom embroidered beanies", "custom beanies long island", "custom knit hats",
+        "custom winter hats", "logo beanies"
+      ],
+      "final_url": "https://47swagco.com/products/100-custom-hats-bundle-50-beanies-50-snapbacks",
+      "path1": "custom", "path2": "beanies",
+      "headlines": [
+        "Custom Beanies Long Island", "Embroidered Logo Beanies", "Custom Winter Hats", "Beanies for Teams & Crews",
+        "Bulk Beanie Bundles", "47 Swag Co Custom Beanies", "Local Long Island Shop", "Order Custom Beanies Online"
+      ],
+      "descriptions": [
+        "Custom embroidered beanies with your logo for teams, businesses and schools.",
+        "Beat the cold in style. Bulk beanie and hat bundles from a Long Island print shop.",
+        "Shop 47 Swag Co for premium custom winter headwear. Order online today."
+      ]
+    },
+    {
+      "name": "Town Hoodies",
+      "max_cpc": 1.5,
+      "match_type": "PHRASE",
+      "keywords": [
+        "west islip hoodie", "lindenhurst hoodie", "east islip hoodie", "massapequa hoodie", "islip hoodie",
+        "bay shore hoodie", "babylon hoodie", "hauppauge hoodie",
+        "west islip lions spirit wear", "lindenhurst bulldogs spirit wear", "east islip spirit wear",
+        "massapequa chiefs spirit wear", "hauppauge eagles spirit wear", "islip buccaneers spirit wear",
+        "long island school spirit wear"
+      ],
+      "final_url": "https://47swagco.com/collections/long-island-school-spirit-wear",
+      "path1": "town", "path2": "hoodies",
+      "headlines": [
+        "Long Island Town Hoodies", "Rep Your Town in Style", "School Spirit Wear", "West Islip, Lindenhurst & More",
+        "Hoodies for Every LI Town", "Local Spirit Wear Shop", "Shop Your School's Colors", "47 Swag Co Spirit Wear"
+      ],
+      "descriptions": [
+        "Hoodies, crews and tees for Long Island towns and schools. Shop your town today.",
+        "West Islip, Lindenhurst, East Islip, Massapequa and more. Designed on Long Island.",
+        "Spirit wear for the whole family: adult, youth and women's styles."
+      ]
+    },
+    {
+      "name": "Team & Business Merch",
+      "max_cpc": 3,
+      "match_type": "PHRASE",
+      "keywords": [
+        "custom team apparel", "custom team shirts long island", "custom business apparel", "custom company shirts",
+        "custom work shirts long island", "custom hoodies for business", "custom staff uniforms", "custom team hoodies",
+        "embroidered business apparel"
+      ],
+      "final_url": "https://47swagco.com/collections/business-bundles",
+      "path1": "team", "path2": "merch",
+      "headlines": [
+        "Custom Team Apparel", "Custom Business Apparel", "Branded Hoodies & Tees", "Bulk Business Bundles",
+        "Long Island Print Shop", "Your Logo on Team Gear", "Contractor & Crew Packs", "47 Swag Co Team Merch",
+        "Tees, Hoodies & Crewnecks"
+      ],
+      "descriptions": [
+        "Custom team and business apparel with your logo. Bulk bundles for crews of any size.",
+        "Tees, hoodies, crewnecks and dry-fit packs from a Long Island print shop.",
+        "Outfit your team, staff or crew. Shop business bundles at 47 Swag Co today."
+      ]
+    }
+  ]
+}

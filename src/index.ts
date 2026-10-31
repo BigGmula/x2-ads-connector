@@ -8,13 +8,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { meta, actId } from "./meta.js";
 import { google, cid } from "./google.js";
+import { campaignTools } from "./google-campaigns.js";
 import { buildReel, listTracks, pickTracks, driveDownloadUrl } from "./reel.js";
 import { hostFile, mediaRoutes } from "./hosting.js";
 import { fillScript } from "./scripts.js";
 
 // ---------- Safety rails ----------
 const READ_ONLY = (process.env.ADS_READ_ONLY || "false").toLowerCase() === "true";
-const MAX_DAILY_BUDGET = Number(process.env.MAX_DAILY_BUDGET || 100); // dollars/day, hard cap on any budget this server sets
+const MAX_DAILY_BUDGET = Number(process.env.MAX_DAILY_BUDGET || 30); // dollars/day, hard cap on any budget this server sets
 
 function guardWrite() {
   if (READ_ONLY) throw new Error("This connector is in READ-ONLY mode (ADS_READ_ONLY=true). No changes were made.");
@@ -33,6 +34,26 @@ const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.s
 const fail = (e: unknown) => ({ isError: true, content: [{ type: "text" as const, text: e instanceof Error ? e.message : String(e) }] });
 const wrap = <A>(fn: (a: A) => Promise<unknown>) => async (a: A) => {
   try { return ok(await fn(a)); } catch (e) { return fail(e); }
+};
+
+const gCreate = campaignTools(google, { guardWrite, guardBudget });
+const MatchType = z.enum(["EXACT", "PHRASE", "BROAD"]);
+const Place = z.union([
+  z.string().describe('A county, city, ZIP or state, e.g. "Nassau County, NY", "Suffolk County, NY", "Lindenhurst, NY"'),
+  z.object({
+    town: z.string(), state: z.string().default("NY"), radius_miles: z.number().positive().max(500),
+    lat: z.number().optional(), lng: z.number().optional(),
+  }).describe("Radius around a town, e.g. { town: 'West Islip', radius_miles: 5 }. lat/lng optional (Google geocodes the town otherwise)"),
+]);
+const CreateFlags = {
+  dry_run: z.boolean().default(false).describe("Have Google validate everything without creating anything"),
+  confirm: z.boolean().optional().describe("Set true only after the user approves the plan"),
+};
+const Rsa = {
+  headlines: z.array(z.string().max(30)).min(3).max(15).describe("3-15 headlines, 30 characters max each"),
+  descriptions: z.array(z.string().max(90)).min(2).max(4).describe("2-4 descriptions, 90 characters max each"),
+  final_url: z.string().url().describe("Landing page; utm_source=google, utm_medium=cpc, utm_campaign=<ad group name> are added automatically"),
+  path1: z.string().max(15).optional(), path2: z.string().max(15).optional(),
 };
 
 const DateRange = z.enum(["today", "yesterday", "last_7d", "last_14d", "last_30d", "this_month", "last_month"]).default("last_7d");
@@ -116,7 +137,8 @@ function buildServer() {
   const s = new McpServer({ name: "x2-ads-connector", version: "1.0.0" });
 
   // Tag every tool read-only vs write so Claude (and the directory) know which ones change things
-  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords", "build_reel", "publish_reel"]);
+  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords", "build_reel", "publish_reel",
+    "google_create_campaign", "google_create_ad_group", "google_add_keywords", "google_create_responsive_search_ad", "google_add_location_targets", "google_build_search_campaign"]);
   const reg = s.registerTool.bind(s) as any;
   (s as any).registerTool = (name: string, cfg: any, cb: any) =>
     reg(name, { ...cfg, annotations: { title: cfg.title, readOnlyHint: !WRITES.has(name), destructiveHint: false, openWorldHint: true } }, cb);
@@ -582,6 +604,79 @@ function buildServer() {
     await google.addNegativeKeywords(customer_id, campaign_id, keywords, match_type);
     return { campaign_id, added: keywords.length, match_type };
   }));
+
+  // ===== GOOGLE: CAMPAIGN BUILDING =====
+  // Every create: dry_run: true has Google validate it and creates nothing; otherwise confirm: true is required
+  // (after the user approves). New campaigns are always PAUSED. Each call is logged as a [google-create] line.
+  const CREATE_NOTE = " Call with dry_run: true first and show the user the plan; only call with confirm: true after they approve.";
+
+  s.registerTool("google_create_campaign", {
+    title: "Google Ads: create Search campaign (PAUSED)",
+    description: "Create a Google Search campaign with its own daily budget, Maximize Clicks bidding, Google Search only (no partners/display), and location targets (people in the area). ALWAYS created PAUSED; turn it on later with google_set_campaign_status. Budget capped by MAX_DAILY_BUDGET." + CREATE_NOTE,
+    inputSchema: {
+      customer_id: z.string().describe("10-digit customer ID, dashes OK"),
+      name: z.string().min(1).max(255),
+      daily_budget: z.number().positive().describe("Dollars per day"),
+      locations: z.array(Place).min(1),
+      start_paused: z.boolean().default(true).describe("Always treated as true"),
+      max_cpc: z.number().positive().optional().describe("Optional max cost per click in dollars (Maximize Clicks ceiling)"),
+      ...CreateFlags,
+    },
+  }, wrap((a: any) => gCreate.createCampaign(a)));
+
+  s.registerTool("google_create_ad_group", {
+    title: "Google Ads: create ad group",
+    description: "Create a Search ad group in a campaign with a max CPC bid in dollars." + CREATE_NOTE,
+    inputSchema: { customer_id: z.string(), campaign_id: z.string(), name: z.string().min(1).max(255), max_cpc: z.number().positive(), ...CreateFlags },
+  }, wrap((a: any) => gCreate.createAdGroup(a)));
+
+  s.registerTool("google_add_keywords", {
+    title: "Google Ads: add keywords",
+    description: "Add keywords to an ad group with one match type (default PHRASE), plus optional ad-group negative keywords. For campaign-wide negatives use google_add_negative_keywords." + CREATE_NOTE,
+    inputSchema: {
+      customer_id: z.string(), ad_group_id: z.string(),
+      keywords: z.array(z.string()).max(500).optional(), match_type: MatchType.default("PHRASE"),
+      negative_keywords: z.array(z.string()).max(500).optional(), negative_match_type: MatchType.default("PHRASE"),
+      ...CreateFlags,
+    },
+  }, wrap((a: any) => gCreate.addKeywords(a)));
+
+  s.registerTool("google_create_responsive_search_ad", {
+    title: "Google Ads: create responsive search ad",
+    description: "Create a responsive search ad in an ad group: 3-15 headlines (30 chars), 2-4 descriptions (90 chars), final URL and optional display paths (15 chars). UTM tags are appended to the final URL automatically (utm_campaign = ad group name)." + CREATE_NOTE,
+    inputSchema: {
+      customer_id: z.string(), ad_group_id: z.string(),
+      ad_group_name: z.string().optional().describe("Used for utm_campaign; looked up from the ad group if empty"),
+      ...Rsa, ...CreateFlags,
+    },
+  }, wrap((a: any) => gCreate.createResponsiveSearchAd(a)));
+
+  s.registerTool("google_add_location_targets", {
+    title: "Google Ads: add location targets",
+    description: "Target a campaign at counties, cities, ZIPs or states by name (e.g. \"Nassau County, NY\", \"Suffolk County, NY\") and/or a radius around a town ({ town, radius_miles })." + CREATE_NOTE,
+    inputSchema: { customer_id: z.string(), campaign_id: z.string(), places: z.array(Place).min(1), ...CreateFlags },
+  }, wrap((a: any) => gCreate.addLocationTargets(a)));
+
+  s.registerTool("google_build_search_campaign", {
+    title: "Google Ads: build a whole Search campaign (PAUSED)",
+    description: "Create a complete Search campaign in ONE all-or-nothing request: budget, PAUSED campaign (Maximize Clicks), locations, campaign negatives, and ad groups each with keywords and a responsive search ad (UTM tags added). dry_run: true has Google validate the whole build end to end without creating anything. Budget capped by MAX_DAILY_BUDGET." + CREATE_NOTE,
+    inputSchema: {
+      customer_id: z.string(),
+      name: z.string().min(1).max(255),
+      daily_budget: z.number().positive(),
+      max_cpc: z.number().positive().optional(),
+      locations: z.array(Place).min(1),
+      negative_keywords: z.array(z.string()).max(500).optional(),
+      negative_match_type: MatchType.default("PHRASE"),
+      ad_groups: z.array(z.object({
+        name: z.string().min(1).max(255), max_cpc: z.number().positive(),
+        keywords: z.array(z.string()).min(1).max(500), match_type: MatchType.default("PHRASE"),
+        negative_keywords: z.array(z.string()).optional(),
+        ...Rsa,
+      })).min(1).max(50),
+      ...CreateFlags,
+    },
+  }, wrap((a: any) => gCreate.buildSearchCampaign(a)));
 
   // ===== CROSS-PLATFORM =====
   s.registerTool("all_platforms_summary", {

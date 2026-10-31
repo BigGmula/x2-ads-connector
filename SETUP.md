@@ -6,20 +6,20 @@ Your own Claude connector for **Meta (Facebook/Instagram) Ads** and **Google Ads
 
 | Read (safe, anytime) | Write (with safety rails) |
 |---|---|
-| List ad accounts (Meta + Google) | Create Meta campaigns (always created **PAUSED**) |
+| List ad accounts (Meta + Google) | Create Meta and Google Search campaigns (always created **PAUSED**) |
 | Campaign / ad set / ad lists with creatives | Pause or turn on campaigns, ad sets, ads |
 | Performance: spend, CTR, CPC, CPM, conversions, ROAS | Change daily budgets |
 | Breakdowns by age, gender, region, device, platform | Add negative keywords (Google) |
-| Google search terms (find wasted spend) | |
+| Google search terms (find wasted spend) | Google ad groups, keywords, responsive search ads (UTM-tagged), locations |
 | Google keyword performance + quality scores | |
 | Custom Google reports (GAQL) | |
 | One-shot Meta + Google spend summary | |
 
 **Safety rails built in**
 - Anything that *spends* money (turning on, budget changes) is refused until you approve it in chat.
-- `MAX_DAILY_BUDGET` hard cap — the server refuses any budget above it, no matter what.
+- `MAX_DAILY_BUDGET` hard cap (default $30/day) — the server refuses any budget above it, no matter what.
 - `ADS_READ_ONLY=true` turns off all changes entirely.
-- New campaigns are always created paused.
+- New campaigns are always created paused. Every Google create tool has `dry_run` (Google checks it, nothing is created) and needs `confirm: true` to really create. Each create call is logged as a `[google-create]` line in the server logs.
 - The connector URL contains a long secret; wrong URL = 404.
 
 ---

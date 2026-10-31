@@ -84,6 +84,11 @@ export const google = {
       operations: [{ update: { resourceName: budgetResource, amountMicros: String(amountMicros) }, updateMask: "amount_micros" }],
     }),
 
+  // Atomic multi-resource create (all or nothing). Temporary negative IDs link new resources together.
+  // validateOnly: Google checks every operation but creates nothing (used for dry runs).
+  mutate: (customerId: string, mutateOperations: unknown[], validateOnly = false) =>
+    call(`customers/${cid(customerId)}/googleAds:mutate`, { mutateOperations, validateOnly }),
+
   addNegativeKeywords: (customerId: string, campaignId: string, keywords: string[], matchType: string) =>
     call(`customers/${cid(customerId)}/campaignCriteria:mutate`, {
       operations: keywords.map((text) => ({
