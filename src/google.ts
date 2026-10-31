@@ -1,5 +1,5 @@
 // Google Ads API (REST) client
-const V = process.env.GOOGLE_ADS_API_VERSION || "v21";
+const V = process.env.GOOGLE_ADS_API_VERSION || "v25";
 const BASE = `https://googleads.googleapis.com/${V}`;
 
 let cached: { token: string; exp: number } | null = null;
@@ -11,6 +11,11 @@ function need(name: string): string {
 }
 
 export const cid = (id: string) => String(id).replace(/-/g, "").trim();
+
+// Google retired developer tokens on 2026-09-09 (access now comes from the Cloud project's
+// Google Ads API access level). Still sent if set, for older setups.
+const devToken = (): Record<string, string> =>
+  process.env.GOOGLE_ADS_DEVELOPER_TOKEN ? { "developer-token": process.env.GOOGLE_ADS_DEVELOPER_TOKEN } : {};
 
 async function accessToken(): Promise<string> {
   if (cached && Date.now() < cached.exp - 60_000) return cached.token;
@@ -32,7 +37,7 @@ async function accessToken(): Promise<string> {
 async function call(path: string, body: unknown) {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${await accessToken()}`,
-    "developer-token": need("GOOGLE_ADS_DEVELOPER_TOKEN"),
+    ...devToken(),
     "Content-Type": "application/json",
   };
   if (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID) headers["login-customer-id"] = cid(process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
@@ -47,7 +52,7 @@ async function call(path: string, body: unknown) {
 
 async function listAccessible() {
   const res = await fetch(`${BASE}/customers:listAccessibleCustomers`, {
-    headers: { Authorization: `Bearer ${await accessToken()}`, "developer-token": need("GOOGLE_ADS_DEVELOPER_TOKEN") },
+    headers: { Authorization: `Bearer ${await accessToken()}`, ...devToken() },
   });
   const j: any = await res.json();
   if (!res.ok) throw new Error(`Google Ads API error ${res.status}: ${j?.error?.message || res.statusText}`);

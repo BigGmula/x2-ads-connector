@@ -47,11 +47,11 @@ Make your secret: on a Mac, open Terminal and run `openssl rand -hex 32`. Paste 
 
 Your own ad accounts work right away — no App Review needed.
 
-## Step 3 — Google Ads (~20 min + approval wait)
+## Step 3 — Google Ads (~20 min)
 
-1. **Developer token**: you need a Google Ads **Manager account** (free, ads.google.com/home/tools/manager-accounts). In it: Tools → **API Center** → apply. You start with *test access*; apply for **Basic access** (usually a few business days) to touch real accounts. → `GOOGLE_ADS_DEVELOPER_TOKEN`
-2. **Google Cloud**: console.cloud.google.com → new project → enable **Google Ads API** → APIs & Services → Credentials → Create **OAuth client ID** (type *Desktop app*). → `GOOGLE_ADS_CLIENT_ID` and `GOOGLE_ADS_CLIENT_SECRET`
-3. **Refresh token**: go to developers.google.com/oauthplayground → gear icon → check *Use your own OAuth credentials* → paste the client ID/secret → in scope box type `https://www.googleapis.com/auth/adwords` → Authorize → sign in with the Google account that owns the ads → **Exchange authorization code for tokens** → copy the refresh token. → `GOOGLE_ADS_REFRESH_TOKEN`
+1. **Google Cloud project + API access**: console.cloud.google.com → new project → enable **Google Ads API** → go to **Google Ads API → Overview** (console.cloud.google.com/google/ads-apis/overview) → **Apply for access** to move from *Test* to **Explorer** (2,880 operations/day on real accounts, usually approved in minutes). Developer tokens were retired on 2026-09-09; access now belongs to the Cloud project, so `GOOGLE_ADS_DEVELOPER_TOKEN` can stay empty. Billing on the project must be active (not free trial).
+2. **OAuth client**: **Google Auth Platform** → Get started (app name, your email, audience *External*) → **Audience → Publish app** (in *Testing* mode refresh tokens expire after 7 days) → **Clients → Create client**, type **Web application**, authorized redirect URI `https://developers.google.com/oauthplayground`. → `GOOGLE_ADS_CLIENT_ID` and `GOOGLE_ADS_CLIENT_SECRET`
+3. **Refresh token**: go to developers.google.com/oauthplayground → gear icon → check *Use your own OAuth credentials* → paste the client ID/secret → in scope box type `https://www.googleapis.com/auth/adwords` → Authorize → sign in with the Google account that owns the ads (click through the "Google hasn't verified this app" warning: Advanced → Go to app) → **Exchange authorization code for tokens** → copy the refresh token. → `GOOGLE_ADS_REFRESH_TOKEN`
 4. Put your Manager account ID (no dashes) in `GOOGLE_ADS_LOGIN_CUSTOMER_ID`.
 
 Skip this step if you only want Meta for now — the Meta tools work on their own.
