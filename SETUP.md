@@ -86,6 +86,33 @@ Reels can have a woman's voice reading a short script (from `reels/voiceover-scr
 Try it locally: `npm run reel -- P25 --vo each` builds one version per script angle into `reels/out`.
 The voice is AI-generated, so turn on the platform's AI-content label when posting.
 
+## Step 6 — Posting schedule (~5 min)
+
+The connector posts on its own from a Google Sheet, one row per reel or photo post. It checks the sheet every minute.
+
+1. Open the **47 Swag Co — Posting Schedule** sheet in Drive. **Share → General access → Anyone with the link → Viewer.** (The server reads it without signing in; the link is long and unguessable. Don't post it publicly.)
+2. In Render, add the environment variable `SCHEDULE_SHEET_URL` = the sheet's link. Render restarts with the scheduler on.
+3. Fill in rows. Times are **Eastern**. A row posts only when its **status** column says `approved`; anything else (`draft`, empty) is left alone.
+
+| Column | What to put |
+|---|---|
+| date, time | `2026-11-02` or `11/2/2026`, and `11:30 AM` or `7pm` |
+| type | `reel` or `post` |
+| product_id | `P25` etc. (from the slide sets): gives the slides, the first-comment link and the HOLD check |
+| platforms | `instagram, facebook` (default both), or just one |
+| caption, instagram_caption | Facebook caption; Instagram uses `instagram_caption` if filled, else `caption` |
+| first_comment | Override the first comment (default: the product link) |
+| media | Reel: slide image links (Drive, in order) to build from. Post: the image link |
+| video, cover | A finished reel MP4 (and cover image) to post as is, with no build |
+| voiceover | A script angle (`town-callout`, `direct-question`, `moms-gift`, `new-drop`, `outfit-solved`, `random`) |
+| music | A track from `music/` (e.g. `baileys.mp3`), `none`, or empty for a random one |
+| status | `approved` to post |
+
+- Reels that need building start 25 minutes before their time. A row that's more than 30 minutes late (server down) is skipped, not posted late.
+- Products on HOLD, unreadable dates and missing captions are refused and shown as problems.
+- Ask Claude "what's on the schedule?" (the `schedule_status` tool) to see what's waiting, posted (with links) or failed and why.
+- To pause everything, set `SCHEDULER_ENABLED=false` in Render.
+
 ## Notes
 
 - **Credit repair ads on Meta**: set `special_ad_categories` to `FINANCIAL_PRODUCTS_SERVICES`. Meta rejects credit-related ads without it, and it limits age/zip targeting.

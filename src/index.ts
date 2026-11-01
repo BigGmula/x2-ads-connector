@@ -12,6 +12,7 @@ import { campaignTools } from "./google-campaigns.js";
 import { buildReel, listTracks, pickTracks, driveDownloadUrl } from "./reel.js";
 import { hostFile, mediaRoutes } from "./hosting.js";
 import { fillScript } from "./scripts.js";
+import { startScheduler, readSchedule, scheduleState, scheduleSheetUrl, isApproved, type SchedulerDeps } from "./scheduler.js";
 
 // ---------- Safety rails ----------
 const READ_ONLY = (process.env.ADS_READ_ONLY || "false").toLowerCase() === "true";
@@ -131,6 +132,159 @@ async function waitForJob(job: ReelJob, ms: number) {
       : `Still ${job.status}. In about 30-60 s, call get_reel with job_id "${job.id}" (or call build_reel again with the same settings) to get the video. About 1-2 min per variant in total.`,
   };
 }
+
+// Post a photo to a Facebook Page and/or its Instagram, then the first comment on each
+type PhotoPost = { image_url: string; caption: string; platforms: string[]; instagram_caption?: string; schedule_at?: string; first_comment?: string };
+async function publishPhotoWork(page_id: string, { image_url, caption, platforms, instagram_caption, schedule_at, first_comment }: PhotoPost) {
+  const out: Record<string, any> = {};
+  const page = await meta.pageInfo(page_id);
+  out.page = page.name;
+  if (platforms.includes("facebook")) {
+    let when: number | undefined;
+    if (schedule_at) {
+      when = Math.floor(new Date(schedule_at).getTime() / 1000);
+      if (!Number.isFinite(when)) throw new Error("schedule_at is not a valid date.");
+    }
+    try {
+      const r = await meta.fbPhotoPost(page_id, page.access_token, image_url, caption, when);
+      const postId = r.post_id || r.id;
+      out.facebook = { post_id: postId, scheduled: !!when };
+      if (first_comment && !when) {
+        try { await meta.fbComment(postId, page.access_token, first_comment); (out.facebook as any).first_comment = "posted"; }
+        catch (e) { (out.facebook as any).first_comment = (e as Error).message; }
+      }
+    } catch (e) { out.facebook = { error: (e as Error).message }; }
+  }
+  if (platforms.includes("instagram")) {
+    const ig = page.instagram_business_account?.id;
+    if (!ig) out.instagram = { error: "No Instagram professional account is linked to this Page." };
+    else {
+      try {
+        const r = await meta.igPhotoPost(ig, page.access_token, image_url, instagram_caption || caption);
+        out.instagram = { media_id: r.id, account: page.instagram_business_account?.username };
+        if (first_comment) {
+          try { await meta.igComment(r.id, first_comment); (out.instagram as any).first_comment = "posted"; }
+          catch (e) { (out.instagram as any).first_comment = (e as Error).message; }
+        }
+      } catch (e) { out.instagram = { error: (e as Error).message }; }
+    }
+  }
+  return out;
+}
+
+// Post a finished reel to Instagram Reels and/or Facebook Page Reels, then the first comment on each
+type ReelPost = { video_url: string; cover_url?: string; caption: string; instagram_caption?: string; comment?: string; platforms: string[]; pageId: string; dry_run?: boolean };
+async function publishReelWork(p: ReelPost) {
+  const page = await meta.pageInfo(p.pageId), ig = page.instagram_business_account?.id;
+  const { platforms, caption, comment, dry_run, pageId } = p;
+  const out: Record<string, any> = { page: page.name, dry_run };
+  // Google Drive links are copied onto this server first: Meta needs a direct, public file URL
+  const video = await rehostDrive(p.video_url), cover = p.cover_url ? await rehostDrive(p.cover_url) : undefined;
+  if (video !== p.video_url) out.hosted_video_url = video;
+  const tasks: Promise<void>[] = [];
+  if (platforms.includes("instagram")) tasks.push((async () => {
+    try {
+      const c = await meta.igReelContainer(ig, video, p.instagram_caption || caption, cover);
+      // Meta downloads and processes the video; usually 30 s to 2 min
+      let status = "";
+      for (let i = 0; i < 60; i++) {
+        status = (await meta.igContainerStatus(c.id)).status_code;
+        if (status === "FINISHED" || status === "ERROR" || status === "EXPIRED") break;
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      if (status !== "FINISHED") throw new Error(`Instagram couldn't process the video (status ${status || "unknown"}).`);
+      if (dry_run) { out.instagram = { ready: true, note: "Uploaded and processed by Instagram; not published (dry run)." }; return; }
+      const pub = await meta.igPublish(ig!, c.id);
+      const info = await meta.igMedia(pub.id).catch(() => ({}));
+      const res: Record<string, unknown> = { media_id: pub.id, permalink: (info as any).permalink };
+      if (comment) {
+        try { await meta.igComment(pub.id, comment); res.first_comment = "posted"; }
+        catch (e) { res.first_comment = `failed: ${(e as Error).message}`; }
+      }
+      out.instagram = res;
+    } catch (e) { out.instagram = { error: (e as Error).message }; }
+  })());
+  if (platforms.includes("facebook")) tasks.push((async () => {
+    try {
+      const st = await meta.fbReelStart(pageId, page.access_token);
+      await meta.fbReelUpload(st.upload_url, page.access_token, video);
+      if (dry_run) { out.facebook = { ready: true, note: "Uploaded to Facebook; not published (dry run). The unfinished upload is discarded." }; return; }
+      await meta.fbReelFinish(pageId, page.access_token, st.video_id, caption);
+      const res: Record<string, unknown> = { video_id: st.video_id };
+      // Comments work once Facebook has finished processing the reel
+      for (let i = 0; i < 36; i++) {
+        const v = await meta.fbVideoStatus(st.video_id, page.access_token).catch(() => ({} as any));
+        res.permalink = v.permalink_url ? `https://www.facebook.com${v.permalink_url}` : res.permalink;
+        const vs = v.status?.video_status;
+        if (vs === "ready" || vs === "published" || v.status?.publishing_phase?.status === "complete") break;
+        if (vs === "error") { res.processing = "error"; break; }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      if (comment) {
+        try { await meta.fbComment(st.video_id, page.access_token, comment); res.first_comment = "posted"; }
+        catch (e) { res.first_comment = `failed: ${(e as Error).message}`; }
+      }
+      out.facebook = res;
+    } catch (e) { out.facebook = { error: (e as Error).message }; }
+  })());
+  await Promise.all(tasks);
+  return out;
+}
+
+// ---------- Scheduler ----------
+// Rows in the schedule sheet are posted with the same code as the publish tools; see scheduler.ts
+const findProduct = async (id?: string) => (id ? (await slideSets()).find((p) => p.id.toUpperCase() === id.toUpperCase()) : undefined);
+const defaultPage = () => process.env.META_PAGE_ID || "1378673685337029";
+const schedulerDeps: SchedulerDeps = {
+  async validate(r) {
+    const problems: string[] = [];
+    if (READ_ONLY) problems.push("the connector is read-only (ADS_READ_ONLY=true)");
+    const product = await findProduct(r.product_id);
+    if (product?.hold) problems.push(`${product.id} is on HOLD (${product.status})`);
+    if (r.type === "reel" && !r.video && !r.media.length && !product) problems.push(`no slide set for ${r.product_id}; add slide links in media or a video link`);
+    if (r.voiceover && !product) problems.push("a voiceover needs a product_id with a slide set (see list_reel_products)");
+    return problems;
+  },
+  async build(r) {
+    const product = await findProduct(r.product_id);
+    const slides = r.media.length ? r.media : product!.slides.map((id) => `drive:${id}`);
+    let music: string | undefined;
+    if (r.music && r.music !== "none") {
+      music = (await listTracks()).find((f) => path.basename(f).toLowerCase() === r.music!.toLowerCase());
+      if (!music) throw new Error(`Track ${r.music} isn't in the music folder.`);
+    } else if (!r.music) [music] = await pickTracks(1);
+    const platform = r.platforms.includes("instagram") ? "instagram" : "facebook";
+    const job = startReelJob(async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), "sched-"));
+      try {
+        const script = r.voiceover ? await fillScript(product!, r.voiceover, platform) : undefined;
+        const b = await buildReel({ slides: slides.map((src) => ({ src })), music, voiceover: script?.text, outPath: path.join(dir, "reel.mp4") });
+        return { video_url: await hostFile(b.path), cover_url: await hostFile(b.cover) };
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }, 1, true, "sched");
+    await job.done;
+    if (job.status === "failed") throw new Error(job.error);
+    return job.result as { video_url: string; cover_url?: string };
+  },
+  async publishReel(r, v) {
+    const product = await findProduct(r.product_id);
+    return publishReelWork({ ...v, caption: r.caption, instagram_caption: r.instagram_caption, comment: r.first_comment || product?.url, platforms: r.platforms, pageId: defaultPage() });
+  },
+  async publishPost(r) {
+    const product = await findProduct(r.product_id);
+    return publishPhotoWork(defaultPage(), { image_url: await rehostDrive(r.media[0]), caption: r.caption, instagram_caption: r.instagram_caption, platforms: r.platforms, first_comment: r.first_comment || product?.url });
+  },
+  // After a restart the state file may be gone; an Instagram post with the same caption in the last 6 hours means it already went out
+  async alreadyPosted(r) {
+    if (!r.platforms.includes("instagram")) return false;
+    const ig = (await meta.pageInfo(defaultPage())).instagram_business_account?.id;
+    if (!ig) return false;
+    const caption = (r.instagram_caption || r.caption).trim();
+    return ((await meta.igRecentMedia(ig)).data || []).some((m: any) => (m.caption || "").trim() === caption && Date.now() - new Date(m.timestamp).getTime() < 6 * 3_600_000);
+  },
+};
 
 // ---------- Tools ----------
 function buildServer() {
@@ -259,41 +413,9 @@ function buildServer() {
       schedule_at: z.string().optional().describe("ISO time to schedule the Facebook post, e.g. 2026-10-28T11:30:00-04:00. Scheduled posts can't get a first comment."),
       first_comment: z.string().max(2200).optional().describe("Auto-posted as the first comment on each published post, e.g. 'Shop here 👉 <product link>'. Links are clickable in Facebook comments, not Instagram."),
     },
-  }, wrap(async ({ page_id, image_url, caption, platforms, instagram_caption, schedule_at, first_comment }: any) => {
+  }, wrap(async ({ page_id, ...post }: any) => {
     guardWrite();
-    const page = await meta.pageInfo(page_id);
-    const out: Record<string, unknown> = { page: page.name };
-    if (platforms.includes("facebook")) {
-      let when: number | undefined;
-      if (schedule_at) {
-        when = Math.floor(new Date(schedule_at).getTime() / 1000);
-        if (!Number.isFinite(when)) throw new Error("schedule_at is not a valid date.");
-      }
-      try {
-        const r = await meta.fbPhotoPost(page_id, page.access_token, image_url, caption, when);
-        const postId = r.post_id || r.id;
-        out.facebook = { post_id: postId, scheduled: !!when };
-        if (first_comment && !when) {
-          try { await meta.fbComment(postId, page.access_token, first_comment); (out.facebook as any).first_comment = "posted"; }
-          catch (e) { (out.facebook as any).first_comment = (e as Error).message; }
-        }
-      } catch (e) { out.facebook = { error: (e as Error).message }; }
-    }
-    if (platforms.includes("instagram")) {
-      const ig = page.instagram_business_account?.id;
-      if (!ig) out.instagram = { error: "No Instagram professional account is linked to this Page." };
-      else {
-        try {
-          const r = await meta.igPhotoPost(ig, page.access_token, image_url, instagram_caption || caption);
-          out.instagram = { media_id: r.id, account: page.instagram_business_account?.username };
-          if (first_comment) {
-            try { await meta.igComment(r.id, first_comment); (out.instagram as any).first_comment = "posted"; }
-            catch (e) { (out.instagram as any).first_comment = (e as Error).message; }
-          }
-        } catch (e) { out.instagram = { error: (e as Error).message }; }
-      }
-    }
-    return out;
+    return await publishPhotoWork(page_id, post);
   }));
 
   // ===== REELS =====
@@ -429,62 +551,35 @@ function buildServer() {
     const recent = reelJobsByKey.get(key);
     if (recent && reelJobs.has(recent.id) && recent.status !== "failed") return await waitForJob(recent, 20_000);
 
-    const job = startReelJob(async () => {
-      const out: Record<string, unknown> = { page: page.name, dry_run };
-      // Google Drive links are copied onto this server first: Meta needs a direct, public file URL
-      const video = await rehostDrive(video_url), cover = cover_url ? await rehostDrive(cover_url) : undefined;
-      if (video !== video_url) out.hosted_video_url = video;
-      const tasks: Promise<void>[] = [];
-      if (platforms.includes("instagram")) tasks.push((async () => {
-        try {
-          const c = await meta.igReelContainer(ig, video, instagram_caption || caption, cover);
-          // Meta downloads and processes the video; usually 30 s to 2 min
-          let status = "";
-          for (let i = 0; i < 60; i++) {
-            status = (await meta.igContainerStatus(c.id)).status_code;
-            if (status === "FINISHED" || status === "ERROR" || status === "EXPIRED") break;
-            await new Promise((r) => setTimeout(r, 5000));
-          }
-          if (status !== "FINISHED") throw new Error(`Instagram couldn't process the video (status ${status || "unknown"}).`);
-          if (dry_run) { out.instagram = { ready: true, note: "Uploaded and processed by Instagram; not published (dry run)." }; return; }
-          const p = await meta.igPublish(ig, c.id);
-          const info = await meta.igMedia(p.id).catch(() => ({}));
-          const res: Record<string, unknown> = { media_id: p.id, permalink: (info as any).permalink };
-          if (comment) {
-            try { await meta.igComment(p.id, comment); res.first_comment = "posted"; }
-            catch (e) { res.first_comment = `failed: ${(e as Error).message}`; }
-          }
-          out.instagram = res;
-        } catch (e) { out.instagram = { error: (e as Error).message }; }
-      })());
-      if (platforms.includes("facebook")) tasks.push((async () => {
-        try {
-          const st = await meta.fbReelStart(pageId, page.access_token);
-          await meta.fbReelUpload(st.upload_url, page.access_token, video);
-          if (dry_run) { out.facebook = { ready: true, note: "Uploaded to Facebook; not published (dry run). The unfinished upload is discarded." }; return; }
-          await meta.fbReelFinish(pageId, page.access_token, st.video_id, caption);
-          const res: Record<string, unknown> = { video_id: st.video_id };
-          // Comments work once Facebook has finished processing the reel
-          for (let i = 0; i < 36; i++) {
-            const v = await meta.fbVideoStatus(st.video_id, page.access_token).catch(() => ({} as any));
-            res.permalink = v.permalink_url ? `https://www.facebook.com${v.permalink_url}` : res.permalink;
-            const vs = v.status?.video_status;
-            if (vs === "ready" || vs === "published" || v.status?.publishing_phase?.status === "complete") break;
-            if (vs === "error") { res.processing = "error"; break; }
-            await new Promise((r) => setTimeout(r, 5000));
-          }
-          if (comment) {
-            try { await meta.fbComment(st.video_id, page.access_token, comment); res.first_comment = "posted"; }
-            catch (e) { res.first_comment = `failed: ${(e as Error).message}`; }
-          }
-          out.facebook = res;
-        } catch (e) { out.facebook = { error: (e as Error).message }; }
-      })());
-      await Promise.all(tasks);
-      return out;
-    }, 1, false, "post");
+    const job = startReelJob(() => publishReelWork({ video_url, cover_url, caption, instagram_caption, comment, platforms, pageId, dry_run }), 1, false, "post");
     reelJobsByKey.set(key, job);
     return await waitForJob(job, 20_000);
+  }));
+
+  s.registerTool("schedule_status", {
+    title: "Schedule: what's posting and when",
+    description: "Read the posting schedule (a Google Sheet, one row per reel or photo post, Eastern time) and show each row's state: not approved, waiting, building, posted (with links), failed (with the reason) or missed. Rows post only when their status column says approved. Covers rows from `days` ago to `days` ahead. Nothing is posted by this tool.",
+    inputSchema: { days: z.number().int().min(1).max(60).default(7) },
+  }, wrap(async ({ days }: any) => {
+    const [rows, st] = await Promise.all([readSchedule(), scheduleState()]);
+    const now = Date.now(), span = days * 86_400_000;
+    const link = (x: any) => x && (x.error ? `error: ${x.error}` : x.permalink || x.post_id || x.media_id);
+    return {
+      sheet: scheduleSheetUrl(),
+      scheduler: process.env.SCHEDULER_ENABLED === "false" ? "off (SCHEDULER_ENABLED=false)" : "on, checks every minute",
+      now_eastern: new Date().toLocaleString("en-US", { timeZone: "America/New_York" }),
+      rows: rows.filter((r) => !r.when || Math.abs(r.when.getTime() - now) < span).map((r) => {
+        const x = st[r.key], res = x?.result as any;
+        return {
+          row: r.row, when: `${r.date} ${r.time}`, type: r.type, product_id: r.product_id, platforms: r.platforms,
+          caption: r.caption.length > 70 ? `${r.caption.slice(0, 70)}...` : r.caption,
+          state: x?.state || (r.problems.length ? "problem" : isApproved(r) ? "waiting" : "not approved"),
+          ...(r.problems.length ? { problems: r.problems } : {}),
+          ...(x?.error ? { error: x.error } : {}),
+          ...(res && typeof res === "object" ? { instagram: link(res.instagram), facebook: link(res.facebook) } : res ? { note: res } : {}),
+        };
+      }),
+    };
   }));
 
   s.registerTool("get_reel", {
@@ -744,3 +839,4 @@ app.all("/mcp/:secret", (_req, res) => res.status(405).set("Allow", "POST").end(
 
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => console.log(`x2 ads connector listening on :${PORT} (read-only: ${READ_ONLY}, budget cap: $${MAX_DAILY_BUDGET}/day)`));
+startScheduler(schedulerDeps);
