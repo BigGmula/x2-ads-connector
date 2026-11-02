@@ -4,7 +4,8 @@
 //   npm run reel -- --all                       every product with a slide set (HOLD ones included, marked in the name)
 //   npm run reel -- P25 --vo each --platform facebook   add a voiceover (an angle from reels/voiceover-scripts.json, random, or each)
 // Job file: { name, outDir?, slides: [{src, text?, seconds?}], fit?, motion?, safeArea?, transition?,
-//             hooks?: [..], music?: [..] | false, variants?, musicStart?, secondsPerSlide?, endCard?: {logo?, shopUrl?, code?, cta?} }
+//             hooks?: [..], music?: [..] | false, variants?, musicStart?, secondsPerSlide?, endCard?: {logo?, shopUrl?, code?, cta?},
+//             voiceover?: "script read in one take" }
 // Slide src: local path (relative to the job file), public URL, Google Drive link, or "drive:<file id>"
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -37,6 +38,8 @@ if (args[0].endsWith(".json")) {
     job.music === false ? [] : job.music ? job.music.map(local) : await pickTracks(job.variants || 1),
     path.resolve(base, job.outDir || "out"),
     job.name || path.basename(file, ".json"),
+    job.voiceover ? 1 : undefined,
+    job.voiceover ? [job.voiceover] : [],
   );
   for (const r of results) console.log(`${r.variant}: ${r.path} (${r.duration}s)${r.hook ? ` hook="${r.hook}"` : ""}${r.music ? ` music=${path.basename(r.music)}` : ""}`);
 } else {
