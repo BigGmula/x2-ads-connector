@@ -11,6 +11,7 @@ import { google, cid } from "./google.js";
 import { campaignTools } from "./google-campaigns.js";
 import { buildReel, listTracks, pickTracks, driveDownloadUrl } from "./reel.js";
 import { hostFile, mediaRoutes } from "./hosting.js";
+import { dashboardRoutes } from "./dashboard.js";
 import { fillScript } from "./scripts.js";
 import { startScheduler, readSchedule, scheduleState, scheduleSheetUrl, isApproved, type SchedulerDeps } from "./scheduler.js";
 
@@ -573,7 +574,7 @@ function buildServer() {
         return {
           row: r.row, when: `${r.date} ${r.time}`, type: r.type, product_id: r.product_id, platforms: r.platforms,
           caption: r.caption.length > 70 ? `${r.caption.slice(0, 70)}...` : r.caption,
-          state: x?.state || (r.problems.length ? "problem" : isApproved(r) ? "waiting" : "not approved"),
+          state: x?.state || (r.problems.length ? "problem" : isApproved(r, x) ? "waiting" : x?.decision === "skipped" ? "skipped" : "not approved"),
           ...(r.problems.length ? { problems: r.problems } : {}),
           ...(x?.error ? { error: x.error } : {}),
           ...(res && typeof res === "object" ? { instagram: link(res.instagram), facebook: link(res.facebook) } : res ? { note: res } : {}),
@@ -821,6 +822,14 @@ app.use(express.json({ limit: "2mb" }));
 
 app.get("/", (_req, res) => res.send("x2 ads connector is running."));
 mediaRoutes(app);
+app.set("trust proxy", 1); // Render's proxy: real client address for the login rate limit
+dashboardRoutes(app, {
+  products: slideSets,
+  instagramMedia: async () => {
+    const ig = (await meta.pageInfo(defaultPage())).instagram_business_account?.id;
+    return ig ? (await meta.igMediaList(ig)).data || [] : [];
+  },
+});
 
 app.post("/mcp/:secret", async (req, res) => {
   if (!secretOk(req.params.secret)) return res.status(404).end();

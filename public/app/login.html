@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · 47 Studio</title>
+<meta name="theme-color" content="#0b0b0f">
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(ellipse at top, #13183a 0%, #0b0b0f 55%); color: #f4f4f7; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; box-sizing: border-box; }
+  form { width: 100%; max-width: 360px; background: #14141b; border: 1px solid #262632; border-radius: 18px; padding: 32px 28px; }
+  .mark { width: 52px; height: 52px; border-radius: 14px; background: #000; border: 1px solid #2a2a38; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 22px; margin-bottom: 18px; }
+  .mark b { color: #2f6bff; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  p { margin: 0 0 22px; color: #9a9aae; }
+  label { display: block; font-size: 12px; font-weight: 700; color: #9a9aae; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .7px; }
+  input { width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 11px; border: 1px solid #2c2c3a; background: #0f0f15; color: #fff; font: inherit; }
+  input:focus { outline: 2px solid #2f6bff; border-color: transparent; }
+  button { margin-top: 16px; width: 100%; padding: 12px; border: 0; border-radius: 11px; background: #2f6bff; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+  .err { background: rgba(239,68,68,.13); color: #ffb0b0; padding: 9px 12px; border-radius: 10px; margin-bottom: 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+<form method="post" action="/app/login">
+  <div class="mark">4<b>7</b></div>
+  <h1>47 Studio</h1>
+  <p>Schedule, approve and track every post.</p>
+  <div class="err" id="err" hidden></div>
+  <label for="pw">Password</label>
+  <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+  <button type="submit">Sign in</button>
+</form>
+<script>
+  const e = new URLSearchParams(location.search).get("e");
+  if (e) { const el = document.getElementById("err"); el.hidden = false; el.textContent = e === "wait" ? "Too many tries. Wait 15 minutes and try again." : "That password isn't right."; }
+</script>
+</body>
+</html>

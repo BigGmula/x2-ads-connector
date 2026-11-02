@@ -123,6 +123,8 @@ export const meta = {
   igPublish: (igId: string, containerId: string) => call("POST", `${igId}/media_publish`, { creation_id: containerId }),
   igMedia: (mediaId: string) => call("GET", mediaId, { fields: "permalink,timestamp" }),
   igRecentMedia: (igId: string) => call("GET", `${igId}/media`, { fields: "timestamp,media_product_type,caption", limit: 25 }),
+  igMediaList: (igId: string, limit = 30) =>
+    call("GET", `${igId}/media`, { fields: "id,caption,timestamp,media_type,media_product_type,permalink,thumbnail_url,media_url,like_count,comments_count", limit }),
 
   // Facebook Page Reels (page token): start an upload session, have Meta fetch the hosted file, then finish
   fbReelStart: (pageId: string, pageToken: string) => pageCall("POST", `${pageId}/video_reels`, pageToken, { upload_phase: "start" }),

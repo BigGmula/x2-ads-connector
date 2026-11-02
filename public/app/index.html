@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>47 Studio</title>
+<meta name="theme-color" content="#0b0b0f">
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/app/icon-192.png">
+<style>
+:root {
+  --bg: #0b0b0f; --surface: #14141b; --surface-2: #1b1b24; --border: #262632; --text: #f4f4f7; --muted: #9a9aae; --faint: #6b6b80;
+  --accent: #2f6bff; --accent-soft: rgba(47,107,255,.14); --pink: #ff4f9a;
+  --ok: #22c55e; --ok-soft: rgba(34,197,94,.13); --warn: #f5a524; --warn-soft: rgba(245,165,36,.13); --bad: #ef4444; --bad-soft: rgba(239,68,68,.13);
+  --radius: 14px; --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+a { color: inherit; }
+.app { max-width: 1180px; margin: 0 auto; padding: 0 20px 96px; }
+
+/* Header */
+header { position: sticky; top: 0; z-index: 10; background: rgba(11,11,15,.86); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); }
+.bar { max-width: 1180px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 14px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; }
+.mark { width: 32px; height: 32px; border-radius: 9px; background: #000; border: 1px solid #2a2a38; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; }
+.mark b { color: var(--accent); }
+.brand small { display: block; font-weight: 500; color: var(--muted); font-size: 12px; margin-top: -2px; }
+nav.tabs { display: flex; gap: 4px; margin-left: 18px; }
+.tab { border: 0; background: transparent; padding: 8px 14px; border-radius: 999px; color: var(--muted); cursor: pointer; font-weight: 600; }
+.tab:hover { color: var(--text); background: var(--surface); }
+.tab.on { color: var(--text); background: var(--surface-2); }
+.spacer { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.dot.warn { background: var(--warn); }
+.btn { border: 1px solid var(--border); background: var(--surface); padding: 8px 14px; border-radius: 10px; cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; white-space: nowrap; }
+.btn:hover { border-color: #3a3a4a; background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.ok { background: var(--ok-soft); border-color: rgba(34,197,94,.35); color: #7ee2a2; }
+.btn.ghost { background: transparent; }
+.btn.sm { padding: 6px 11px; font-size: 13px; border-radius: 9px; }
+.btn:disabled { opacity: .5; cursor: default; }
+.icon-btn { border: 1px solid var(--border); background: var(--surface); width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: grid; place-items: center; color: var(--muted); }
+.icon-btn:hover { color: var(--text); }
+
+/* Page head */
+.head { display: flex; align-items: end; gap: 16px; margin: 28px 0 18px; flex-wrap: wrap; }
+.head h1 { font-size: 26px; margin: 0; letter-spacing: -.4px; }
+.head p { margin: 4px 0 0; color: var(--muted); }
+.stats { display: flex; gap: 8px; flex-wrap: wrap; }
+.stat { padding: 6px 12px; border-radius: 999px; font-weight: 600; font-size: 13px; background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
+.stat.warn { color: var(--warn); background: var(--warn-soft); border-color: rgba(245,165,36,.3); }
+.stat.ok { color: #7ee2a2; background: var(--ok-soft); border-color: rgba(34,197,94,.3); }
+.stat.bad { color: #ff8a8a; background: var(--bad-soft); border-color: rgba(239,68,68,.3); }
+.stat.on { outline: 2px solid var(--accent); }
+
+/* Week strip */
+.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-bottom: 26px; }
+.day { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 10px 12px; cursor: pointer; text-align: left; }
+.day:hover { border-color: #3a3a4a; }
+.day.today { border-color: var(--accent); background: linear-gradient(180deg, var(--accent-soft), transparent 70%), var(--surface); }
+.day .dn { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
+.day .dd { font-size: 20px; font-weight: 700; margin: 2px 0 6px; }
+.day .counts { display: flex; gap: 4px; flex-wrap: wrap; min-height: 20px; }
+.pill { white-space: nowrap; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.pill.reel { color: #a9c2ff; background: var(--accent-soft); }
+.pill.need { color: var(--warn); background: var(--warn-soft); }
+
+/* Day groups + cards */
+.group { margin-bottom: 30px; scroll-margin-top: 80px; }
+.group h2 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
+.group h2 b { color: var(--text); font-size: 17px; }
+.cards { display: grid; gap: 12px; }
+.card { display: grid; grid-template-columns: 96px 1fr auto; gap: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; align-items: start; }
+.card:hover { border-color: #33333f; }
+.card.done { opacity: .78; }
+.thumb { width: 96px; aspect-ratio: 9/16; border-radius: 10px; background: var(--surface-2) center/cover no-repeat; position: relative; overflow: hidden; cursor: pointer; border: 1px solid var(--border); }
+.thumb.post { aspect-ratio: 4/5; }
+.thumb .play { position: absolute; inset: auto 6px 6px auto; width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,.65); display: grid; place-items: center; }
+.thumb .none { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: 11px; text-align: center; padding: 6px; }
+.body { min-width: 0; }
+.line1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.time { font-weight: 700; font-size: 15px; }
+.type { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--muted); }
+.type.reel { background: var(--accent-soft); color: #a9c2ff; }
+.plat { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted); }
+.prod { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+.prod b { color: var(--text); font-weight: 600; }
+.caption { white-space: pre-wrap; color: #d9d9e3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--faint); font-size: 12px; margin-top: 8px; }
+.meta a { color: #a9c2ff; text-decoration: none; }
+.meta a:hover { text-decoration: underline; }
+.alert { margin-top: 8px; font-size: 12.5px; padding: 7px 10px; border-radius: 9px; background: var(--bad-soft); color: #ffb0b0; }
+.alert.warn { background: var(--warn-soft); color: #ffd28a; }
+.side { display: flex; flex-direction: column; align-items: end; gap: 10px; min-width: 150px; }
+.badge { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.s-draft { background: var(--warn-soft); color: var(--warn); }
+.s-waiting { background: var(--ok-soft); color: #7ee2a2; }
+.s-building, .s-built, .s-posting { background: var(--accent-soft); color: #a9c2ff; }
+.s-posted { background: var(--ok); color: #04210f; }
+.s-posted::before { background: #04210f; }
+.s-failed, .s-problem { background: var(--bad-soft); color: #ff8a8a; }
+.s-missed, .s-skipped { background: var(--surface-2); color: var(--muted); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: end; }
+details.earlier { margin-bottom: 26px; }
+details.earlier summary { cursor: pointer; color: var(--muted); font-weight: 600; margin-bottom: 14px; }
+
+/* Grids */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; text-decoration: none; }
+.tile:hover { border-color: #3a3a4a; }
+.tile .img { aspect-ratio: 4/5; background: var(--surface-2) center/cover no-repeat; position: relative; }
+.tile .img.tall { aspect-ratio: 9/16; }
+.tile .info { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+.tile .t { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tile .sub { color: var(--muted); font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; }
+.corner { position: absolute; top: 8px; left: 8px; }
+
+/* Empty / setup */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; max-width: 640px; }
+.panel h2 { margin: 0 0 8px; font-size: 19px; }
+.panel ol { color: #d0d0dc; padding-left: 20px; line-height: 1.7; }
+.panel code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-size: 13px; }
+.muted { color: var(--muted); }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.skeleton { height: 140px; border-radius: var(--radius); background: linear-gradient(90deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%); background-size: 200% 100%; animation: sh 1.2s infinite; margin-bottom: 12px; }
+@keyframes sh { to { background-position: -200% 0; } }
+
+/* Modal */
+dialog { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 18px; padding: 0; width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+dialog::backdrop { background: rgba(0,0,0,.7); backdrop-filter: blur(4px); }
+.modal { display: grid; grid-template-columns: 300px 1fr; gap: 0; max-height: calc(100vh - 50px); }
+.modal .media { background: #000; display: flex; flex-direction: column; gap: 8px; padding: 14px; overflow-y: auto; }
+.modal .media video, .modal .media img { width: 100%; border-radius: 10px; display: block; }
+.strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.strip img { aspect-ratio: 9/16; object-fit: cover; cursor: pointer; }
+.modal .detail { padding: 22px 24px; overflow-y: auto; }
+.modal h3 { margin: 0 0 4px; font-size: 20px; }
+.field { margin-top: 16px; }
+.field label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); font-weight: 700; margin-bottom: 6px; }
+.field .val { white-space: pre-wrap; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; word-break: break-word; }
+.close { position: absolute; top: 12px; right: 12px; }
+
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: #fff; color: #000; padding: 10px 16px; border-radius: 10px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; z-index: 50; }
+.toast.show { opacity: 1; transform: translateX(-50%); }
+.toast.bad { background: var(--bad); color: #fff; }
+
+/* Phone */
+@media (max-width: 760px) {
+  header { backdrop-filter: none; background: var(--bg); } /* a blurred header would trap the fixed tab bar inside it */
+  .app { padding: 0 16px 96px; }
+  .bar { padding: 10px 16px; }
+  nav.tabs { position: fixed; bottom: 0; left: 0; right: 0; margin: 0; background: rgba(11,11,15,.95); border-top: 1px solid var(--border); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); justify-content: space-around; backdrop-filter: blur(14px); }
+  .tab { flex: 1; }
+  .hide-sm { display: none !important; }
+  .week { grid-template-columns: repeat(7, minmax(92px, 1fr)); overflow-x: auto; scrollbar-width: none; }
+  .card { grid-template-columns: 78px 1fr; }
+  .thumb { width: 78px; }
+  .side { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; align-items: center; min-width: 0; }
+  .modal { grid-template-columns: 1fr; }
+  .head h1 { font-size: 22px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand"><div class="mark">4<b>7</b></div><div>47 Studio<small>47 Swag Co marketing</small></div></div>
+    <nav class="tabs">
+      <button class="tab on" data-tab="schedule">Schedule</button>
+      <button class="tab" data-tab="posted">Posted</button>
+      <button class="tab" data-tab="products">Products</button>
+    </nav>
+    <div class="spacer"></div>
+    <span class="chip hide-sm" id="sched-chip"><span class="dot"></span><span>Loading…</span></span>
+    <a class="btn primary sm" id="add-btn" target="_blank" rel="noopener" hidden>+ Add posts</a>
+    <button class="icon-btn" id="refresh" title="Refresh" aria-label="Refresh">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+    </button>
+    <form method="post" action="/app/logout" class="hide-sm"><button class="icon-btn" title="Sign out" aria-label="Sign out">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 17l5-5-5-5"/><path d="M20 12H9"/><path d="M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"/></svg>
+    </button></form>
+  </div>
+</header>
+
+<main class="app" id="view"></main>
+<dialog id="dlg"></dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+const TZ = "America/New_York";
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (iso, o) => new Date(iso).toLocaleString("en-US", { timeZone: TZ, ...o });
+const dayKey = (iso) => new Date(iso).toLocaleDateString("en-CA", { timeZone: TZ }); // YYYY-MM-DD, sorts as text
+const STATE_LABEL = { draft: "Needs approval", waiting: "Approved", building: "Building reel", built: "Reel ready", posting: "Posting…", posted: "Posted", failed: "Failed", problem: "Fix in sheet", missed: "Not posted", skipped: "Skipped" };
+
+let tab = "schedule", data = { status: null, schedule: null, history: null, products: null }, filter = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(`/app/api${path}`, { ...opts, headers: { "x-studio": "1", ...(opts.body ? { "content-type": "application/json" } : {}) } });
+  if (res.status === 401) { location.href = "/app/login"; throw new Error("Signed out"); }
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || res.statusText);
+  return j;
+}
+function toast(msg, bad) {
+  const t = $("#toast"); t.textContent = msg; t.className = `toast show${bad ? " bad" : ""}`;
+  clearTimeout(t._h); t._h = setTimeout(() => (t.className = "toast"), 2600);
+}
+
+async function load(which, force) {
+  if (data[which] && !force) return data[which];
+  try { data[which] = await api(`/${which}`); }
+  catch (e) { data[which] = { error: e.message }; }
+  return data[which];
+}
+
+function renderChip() {
+  const s = data.status; if (!s) return;
+  const chip = $("#sched-chip");
+  const on = s.scheduler === "on";
+  chip.innerHTML = `<span class="dot ${on ? "on" : "warn"}"></span><span>${on ? "Autopost on" : s.scheduler === "paused" ? "Autopost paused" : "Autopost not set up"}</span>`;
+  const add = $("#add-btn");
+  if (s.sheet) { add.href = s.sheet; add.hidden = false; }
+}
+
+// ---------- Schedule ----------
+function rowCard(r) {
+  const vid = r.video, img = r.cover || r.thumbs[0];
+  const plats = r.platforms.map((p) => `<span class="plat">${p === "instagram" ? "IG" : "FB"}</span>`).join("");
+  const done = ["posted", "missed", "skipped"].includes(r.state);
+  const canDecide = !["posting", "posted", "missed"].includes(r.state);
+  const acts = [];
+  if (canDecide && !r.approved && !r.problems.length) acts.push(`<button class="btn ok sm" data-act="approve" data-key="${r.key}">Approve</button>`);
+  if (canDecide && r.approved && !["failed", "missed"].includes(r.state)) acts.push(`<button class="btn ghost sm" data-act="skip" data-key="${r.key}">Skip</button>`);
+  if (canDecide && r.decision) acts.push(`<button class="btn ghost sm" data-act="reset" data-key="${r.key}" title="Go back to what the sheet says">Undo</button>`);
+  const links = [];
+  if (r.links?.instagram) links.push(`<a href="${esc(r.links.instagram)}" target="_blank" rel="noopener">View on Instagram ↗</a>`);
+  if (r.links?.facebook) links.push(`<a href="${esc(r.links.facebook)}" target="_blank" rel="noopener">View on Facebook ↗</a>`);
+  const errs = [r.error, r.links?.instagram_error && `Instagram: ${r.links.instagram_error}`, r.links?.facebook_error && `Facebook: ${r.links.facebook_error}`].filter(Boolean);
+  return `<article class="card${done ? " done" : ""}" data-key="${r.key}">
+    <div class="thumb ${r.type === "post" ? "post" : ""}" data-open="${r.key}" style="${img ? `background-image:url('${esc(img)}')` : ""}">
+      ${img ? "" : `<div class="none">${r.type === "reel" ? "Built from slides" : "No image"}</div>`}
+      ${vid ? `<div class="play"><svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M7 4v16l13-8z"/></svg></div>` : ""}
+    </div>
+    <div class="body">
+      <div class="line1"><span class="time">${r.when ? fmt(r.when, { hour: "numeric", minute: "2-digit" }) : esc(`${r.date} ${r.time}`)}</span><span class="type ${r.type}">${esc(r.type)}</span>${plats}</div>
+      ${r.product ? `<div class="prod"><b>${esc(r.product.town || r.product.id)}</b>${r.product.title ? ` · ${esc(r.product.title)}` : ""}${r.product.hold ? ` · <span style="color:var(--bad)">ON HOLD</span>` : ""}</div>` : ""}
+      <div class="caption" data-open="${r.key}">${esc(r.caption)}</div>
+      <div class="meta">
+        ${r.voiceover ? `<span>🎙 ${esc(r.voiceover)}</span>` : ""}${r.music ? `<span>♪ ${esc(r.music)}</span>` : r.type === "reel" && !r.video ? "<span>♪ auto</span>" : ""}
+        ${r.first_comment ? `<span>💬 link in first comment</span>` : ""}<span>Sheet row ${r.row}</span>${links.join("")}
+      </div>
+      ${r.problems.length ? `<div class="alert warn">${r.problems.map(esc).join("<br>")}</div>` : ""}
+      ${errs.length ? `<div class="alert">${errs.map(esc).join("<br>")}</div>` : ""}
+    </div>
+    <div class="side"><span class="badge s-${r.state}">${STATE_LABEL[r.state] || esc(r.state)}</span><div class="actions">${acts.join("")}</div></div>
+  </article>`;
+}
+
+function renderSchedule() {
+  const d = data.schedule, v = $("#view");
+  if (!d) { v.innerHTML = `<div class="head"><div><h1>Schedule</h1></div></div>${'<div class="skeleton"></div>'.repeat(3)}`; return; }
+  if (d.error) { v.innerHTML = `<div class="head"><div><h1>Schedule</h1></div></div><div class="panel"><h2>Couldn't load the schedule</h2><p class="muted">${esc(d.error)}</p></div>`; return; }
+  if (d.setup) {
+    v.innerHTML = `<div class="head"><div><h1>Schedule</h1><p>Autopost isn't turned on yet.</p></div></div>
+      <div class="panel"><h2>Two steps to turn on autopost</h2><ol>
+        <li>In Google Drive, open <b>47 Swag Co — Posting Schedule</b> → <b>Share</b> → General access: <b>Anyone with the link · Viewer</b>.</li>
+        <li>In Render → <b>Environment</b>, add <code>SCHEDULE_SHEET_URL</code> = the sheet's link. The app restarts with autopost on.</li></ol>
+        <p class="muted">Then every row you add to the sheet shows up here to approve.</p></div>`;
+    return;
+  }
+  const rows = d.rows, now = Date.now(), today = dayKey(new Date().toISOString());
+  const upcoming = rows.filter((r) => !r.when || dayKey(r.when) >= today || ["building", "built", "posting"].includes(r.state));
+  const past = rows.filter((r) => !upcoming.includes(r)).reverse();
+  const count = (f) => upcoming.filter(f).length;
+  const need = count((r) => r.state === "draft"), appr = count((r) => r.state === "waiting" || r.state === "built"), bad = count((r) => ["problem", "failed"].includes(r.state));
+  const pass = (r) => !filter || (filter === "need" ? r.state === "draft" : filter === "ok" ? ["waiting", "built"].includes(r.state) : ["problem", "failed"].includes(r.state));
+
+  // Next 7 days strip
+  const days = [...Array(7)].map((_, i) => new Date(now + i * 86_400_000).toISOString());
+  const week = days.map((iso) => {
+    const k = dayKey(iso), list = upcoming.filter((r) => r.when && dayKey(r.when) === k);
+    const reels = list.filter((r) => r.type === "reel").length, posts = list.length - reels, needs = list.filter((r) => r.state === "draft").length;
+    return `<button class="day ${k === today ? "today" : ""}" data-day="${k}">
+      <div class="dn">${k === today ? "Today" : fmt(iso, { weekday: "short" })}</div><div class="dd">${fmt(iso, { day: "numeric" })}</div>
+      <div class="counts">${reels ? `<span class="pill reel">${reels} reel${reels > 1 ? "s" : ""}</span>` : ""}${posts ? `<span class="pill">${posts} post${posts > 1 ? "s" : ""}</span>` : ""}${needs ? `<span class="pill need">${needs} to OK</span>` : ""}${!list.length ? `<span class="pill" style="opacity:.5">—</span>` : ""}</div>
+    </button>`;
+  }).join("");
+
+  const groups = {};
+  for (const r of upcoming.filter(pass)) (groups[r.when ? dayKey(r.when) : "?"] ||= []).push(r);
+  const groupHtml = Object.entries(groups).map(([k, list]) => {
+    const iso = list[0].when;
+    const label = !iso ? "Date to fix" : k === today ? "Today" : fmt(iso, { weekday: "long" });
+    return `<section class="group" id="day-${k.replaceAll("/", "-")}"><h2><b>${label}</b>${iso ? fmt(iso, { month: "long", day: "numeric" }) : ""}<span class="muted">· ${list.length}</span></h2><div class="cards">${list.map(rowCard).join("")}</div></section>`;
+  }).join("");
+
+  v.innerHTML = `<div class="head"><div><h1>Schedule</h1><p>Approve what goes out. Times are Eastern. New rows come from the posting sheet.</p></div><div class="spacer"></div>
+    <div class="stats">
+      ${need ? `<button class="stat warn ${filter === "need" ? "on" : ""}" data-filter="need">${need} need approval</button>` : ""}
+      <button class="stat ok ${filter === "ok" ? "on" : ""}" data-filter="ok">${appr} approved</button>
+      ${bad ? `<button class="stat bad ${filter === "bad" ? "on" : ""}" data-filter="bad">${bad} need fixing</button>` : ""}
+    </div></div>
+    <div class="week">${week}</div>
+    ${groupHtml || `<div class="empty">${filter ? "Nothing here. <a href='#' data-filter=''>Show everything</a>" : "Nothing scheduled yet. Add rows to the posting sheet and they'll show up here."}</div>`}
+    ${past.length ? `<details class="earlier"><summary>Earlier (${past.length})</summary><div class="cards">${past.slice(0, 40).map(rowCard).join("")}</div></details>` : ""}`;
+}
+
+function openRow(key) {
+  const r = data.schedule.rows.find((x) => x.key === key); if (!r) return;
+  const dlg = $("#dlg");
+  const media = r.video
+    ? `<video src="${esc(r.video)}" ${r.cover ? `poster="${esc(r.cover)}"` : ""} controls playsinline autoplay></video>`
+    : r.thumbs[0] ? `<img id="big" src="${esc(r.thumbs[0])}" alt="">` : `<div class="empty">No preview</div>`;
+  const strip = !r.video && r.thumbs.length > 1 ? `<div class="strip">${r.thumbs.map((t) => `<img src="${esc(t)}" data-big="${esc(t)}" alt="">`).join("")}</div>` : "";
+  const f = (label, val) => val ? `<div class="field"><label>${label}</label><div class="val">${esc(val)}</div></div>` : "";
+  dlg.innerHTML = `<div class="modal"><div class="media">${media}${strip}${!r.video && r.type === "reel" ? `<p class="muted" style="font-size:12px;margin:4px 0 0">The reel is built from these slides 25 min before it posts${r.voiceover ? `, with the ${esc(r.voiceover)} voiceover` : ""}.</p>` : ""}</div>
+    <div class="detail"><button class="icon-btn close" data-close aria-label="Close">✕</button>
+      <span class="badge s-${r.state}">${STATE_LABEL[r.state] || esc(r.state)}</span>
+      <h3 style="margin-top:10px">${r.when ? fmt(r.when, { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }) : esc(`${r.date} ${r.time}`)}</h3>
+      <div class="muted">${esc(r.type)} · ${r.platforms.map((p) => (p === "instagram" ? "Instagram" : "Facebook")).join(" + ")}${r.product ? ` · ${esc(r.product.id)}${r.product.title ? ` ${esc(r.product.title)}` : ""}` : ""}</div>
+      ${f(r.instagram_caption ? "Facebook caption" : "Caption", r.caption)}${f("Instagram caption", r.instagram_caption)}${f("First comment", r.first_comment)}
+      ${r.product?.url ? `<div class="field"><label>Product</label><a class="btn sm" href="${esc(r.product.url)}" target="_blank" rel="noopener">Open in the shop ↗</a></div>` : ""}
+      <div class="field actions" style="justify-content:start">${$(".actions", document.querySelector(`.card[data-key="${key}"]`))?.innerHTML || ""}</div>
+    </div></div>`;
+  dlg.showModal();
+}
+
+// ---------- Posted ----------
+function renderPosted() {
+  const d = data.history, v = $("#view");
+  const head = `<div class="head"><div><h1>Posted</h1><p>Your latest Instagram posts and reels.</p></div></div>`;
+  if (!d) { v.innerHTML = head + `<div class="grid">${'<div class="skeleton" style="height:320px"></div>'.repeat(4)}</div>`; return; }
+  if (d.error) { v.innerHTML = head + `<div class="panel"><h2>Couldn't load posts</h2><p class="muted">${esc(d.error)}</p></div>`; return; }
+  v.innerHTML = head + (d.instagram.length ? `<div class="grid">${d.instagram.map((m) => `
+    <a class="tile" href="${esc(m.permalink)}" target="_blank" rel="noopener">
+      <div class="img ${m.type === "reel" ? "tall" : ""}" style="background-image:url('${esc(m.image || "")}')"><span class="corner type ${m.type}">${esc(m.type)}</span></div>
+      <div class="info"><div class="t">${esc(m.caption.split("\n")[0] || "(no caption)")}</div>
+      <div class="sub"><span>${fmt(m.when, { month: "short", day: "numeric" })}</span><span>♥ ${m.likes}</span><span>💬 ${m.comments}</span></div></div>
+    </a>`).join("")}</div>` : `<div class="empty">No posts yet.</div>`);
+}
+
+// ---------- Products ----------
+function renderProducts() {
+  const d = data.products, v = $("#view");
+  const head = `<div class="head"><div><h1>Products</h1><p>Designed reel slide sets. Use the ID in the sheet's <b>product_id</b> column.</p></div></div>`;
+  if (!d) { v.innerHTML = head + `<div class="grid">${'<div class="skeleton" style="height:360px"></div>'.repeat(4)}</div>`; return; }
+  if (d.error) { v.innerHTML = head + `<div class="panel"><h2>Couldn't load products</h2><p class="muted">${esc(d.error)}</p></div>`; return; }
+  v.innerHTML = head + `<div class="grid">${d.map((p) => `
+    <a class="tile" href="${esc(p.url)}" target="_blank" rel="noopener">
+      <div class="img tall" style="background-image:url('${esc(p.thumbs[0] || "")}')"><span class="corner pill" style="background:rgba(0,0,0,.7);color:#fff">${esc(p.id)}</span>${p.hold ? `<span class="badge s-failed" style="position:absolute;top:8px;right:8px">HOLD</span>` : ""}</div>
+      <div class="info"><div class="t">${esc(p.title)}</div><div class="sub"><span>${esc(p.town)}</span><span>${esc(p.price_label)}</span></div></div>
+    </a>`).join("")}</div>`;
+}
+
+function render() {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.tab === tab));
+  ({ schedule: renderSchedule, posted: renderPosted, products: renderProducts })[tab]();
+}
+async function show(t, force) {
+  tab = t; render();
+  await load(t === "posted" ? "history" : t, force); render();
+}
+
+// ---------- Events ----------
+document.addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-tab],[data-act],[data-open],[data-filter],[data-day],[data-big],[data-close],#refresh");
+  if (!el) return;
+  if (el.dataset.tab) return show(el.dataset.tab);
+  if (el.id === "refresh") { data.status = await load("status", true); renderChip(); return show(tab, true); }
+  if (el.dataset.filter !== undefined) { e.preventDefault(); filter = filter === el.dataset.filter || !el.dataset.filter ? null : el.dataset.filter; return renderSchedule(); }
+  if (el.dataset.day) { $(`#day-${el.dataset.day.replaceAll("/", "-")}`)?.scrollIntoView({ behavior: "smooth" }); return; }
+  if (el.dataset.big) { const b = $("#big"); if (b) b.src = el.dataset.big; return; }
+  if (el.dataset.close !== undefined) return $("#dlg").close();
+  if (el.dataset.open) return openRow(el.dataset.open);
+  if (el.dataset.act) {
+    el.disabled = true;
+    try {
+      await api(`/rows/${el.dataset.key}/${el.dataset.act}`, { method: "POST" });
+      toast(el.dataset.act === "approve" ? "Approved. It posts on time." : el.dataset.act === "skip" ? "Skipped. It won't post." : "Back to what the sheet says.");
+      $("#dlg").open && $("#dlg").close();
+      await load("schedule", true); renderSchedule();
+    } catch (err) { toast(err.message, true); el.disabled = false; }
+  }
+});
+$("#dlg").addEventListener("click", (e) => { if (e.target === $("#dlg")) $("#dlg").close(); });
+
+(async () => {
+  show("schedule");
+  data.status = await load("status"); renderChip();
+  setInterval(async () => { if (document.visibilityState === "visible" && tab === "schedule") { await load("schedule", true); if (!$("#dlg").open) renderSchedule(); } }, 60_000);
+})();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" }).catch(() => {});
+</script>
+</body>
+</html>

@@ -53,3 +53,20 @@ test("tick: builds ahead, posts when due, once, and skips unapproved or late row
   await tick(deps, noon + 2 * 60_000); await settle(); // again: nothing reposts
   assert.deepEqual(calls.sort(), ["build Build me", "post Photo", "reel Build me https://h/v.mp4"]);
 });
+
+test("dashboard decisions override the sheet's status", async () => {
+  process.env.SCHEDULE_STATE_FILE = `${process.env.TMP || "/tmp"}/schedtest/state-d-${Date.now()}.json`;
+  const csv = "date,time,type,caption,media,status\n2026-11-03,9am,post,Draft row,https://x/a.png,draft\n2026-11-03,9am,post,Approved row,https://x/b.png,approved\n";
+  globalThis.fetch = (async () => new Response(csv)) as any;
+  const { decide } = await import("./scheduler.js");
+  const rows = parseRows(csv);
+  await decide(rows[0].key, "approved");
+  await decide(rows[1].key, "skipped");
+  const posted: string[] = [];
+  const deps: SchedulerDeps = { validate: async () => [], build: async () => ({ video_url: "" }), publishReel: async () => ({}), alreadyPosted: async () => false,
+    publishPost: async (r) => { posted.push(r.caption); return { instagram: { media_id: "1" } }; } };
+  await tick(deps, easternTime("2026-11-03", "9:01 AM")!.getTime());
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(posted, ["Draft row"]);
+  await assert.rejects(decide(rows[0].key, "skipped"), /already gone out/);
+});

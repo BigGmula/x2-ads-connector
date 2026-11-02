@@ -113,6 +113,14 @@ The connector posts on its own from a Google Sheet, one row per reel or photo po
 - Ask Claude "what's on the schedule?" (the `schedule_status` tool) to see what's waiting, posted (with links) or failed and why.
 - To pause everything, set `SCHEDULER_ENABLED=false` in Render.
 
+## Step 7 — 47 Studio, the dashboard app (~2 min)
+
+Open **https://x2-ads-connector.onrender.com/app** to see the schedule, approve or skip posts, see what's posted and browse products.
+
+1. In Render, add `DASHBOARD_PASSWORD` (any password you'll remember). Without it, the password is `CONNECTOR_SECRET`.
+2. **Install it as an app:** on a PC, open the link in Chrome or Edge and click the install icon in the address bar (or menu → *Install 47 Studio*). On an iPhone, Safari → Share → *Add to Home Screen*; on Android, Chrome menu → *Install app*.
+3. **Approve / Skip** in the app wins over the sheet's status column. Those choices are kept on the server's disk, which Render wipes on each deploy, so add a Render **Disk** (1 GB, mount path `/var/data`) and set `SCHEDULE_STATE_FILE=/var/data/schedule-state.json` to keep them. Without a disk, a deploy resets app approvals (rows then go back to what the sheet says; nothing extra gets posted).
+
 ## Notes
 
 - **Credit repair ads on Meta**: set `special_ad_categories` to `FINANCIAL_PRODUCTS_SERVICES`. Meta rejects credit-related ads without it, and it limits age/zip targeting.

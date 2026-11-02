@@ -11,7 +11,8 @@ export type Row = {
   platforms: Platform[]; caption: string; instagram_caption?: string; first_comment?: string;
   media: string[]; video?: string; cover?: string; voiceover?: string; music?: string; status: string; problems: string[];
 };
-export type RowState = { state: "building" | "built" | "posting" | "posted" | "failed" | "missed"; at: string; video_url?: string; cover_url?: string; result?: unknown; error?: string };
+// decision: Approve/Skip from the dashboard, which wins over the sheet's status column
+export type RowState = { state?: "building" | "built" | "posting" | "posted" | "failed" | "missed"; decision?: "approved" | "skipped"; at: string; video_url?: string; cover_url?: string; result?: unknown; error?: string };
 export type SchedulerDeps = {
   validate(row: Row): Promise<string[]>; // extra problems (unknown product, HOLD...)
   build(row: Row): Promise<{ video_url: string; cover_url?: string }>;
@@ -70,6 +71,7 @@ export function easternTime(date: string, time: string): Date | undefined {
 
 export function sheetCsvUrl(url: string): string {
   const id = url.match(/\/spreadsheets\/d\/([\w-]+)/)?.[1];
+  if (!id && /^https?:\/\/.+\.csv(\?|$)/i.test(url)) return url; // a plain CSV file (local testing)
   if (!id) throw new Error(`${url} isn't a Google Sheets link.`);
   const gid = url.match(/[#&?]gid=(\d+)/)?.[1];
   return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv${gid ? `&gid=${gid}` : ""}`;
@@ -124,7 +126,7 @@ export async function readSchedule(): Promise<Row[]> {
   return parseRows(text);
 }
 
-export const isApproved = (r: Row) => APPROVED.has(r.status);
+export const isApproved = (r: Row, s?: RowState) => (s?.decision ? s.decision === "approved" : APPROVED.has(r.status));
 export const needsBuild = (r: Row) => r.type === "reel" && !r.video; // finished video given, or build one from slides
 
 let state: Record<string, RowState> = {};
@@ -142,6 +144,15 @@ const set = async (key: string, s: Omit<RowState, "at">) => { state[key] = { ...
 
 export async function scheduleState() { await loadState(); return state; }
 
+// Approve or skip a row from the dashboard (null goes back to the sheet's status); posted rows can't change
+export async function decide(key: string, decision: "approved" | "skipped" | null) {
+  await loadState();
+  const s = state[key];
+  if (s?.state === "posting" || s?.state === "posted") throw new Error("That post has already gone out.");
+  if (decision) await set(key, { decision });
+  else if (s) { delete s.decision; await saveState(); }
+}
+
 const inFlight = new Set<string>();
 const succeeded = (out: Record<string, any>, platforms: Platform[]) => platforms.some((p) => out[p] && !out[p].error);
 
@@ -150,9 +161,9 @@ export async function tick(deps: SchedulerDeps, now = Date.now()) {
   await loadState();
   const rows = await readSchedule();
   for (const r of rows) {
-    if (!isApproved(r) || !r.when || inFlight.has(r.key)) continue;
     const s = state[r.key];
-    if (s && ["posted", "failed", "missed", "posting"].includes(s.state)) continue;
+    if (!isApproved(r, s) || !r.when || inFlight.has(r.key)) continue;
+    if (s?.state && ["posted", "failed", "missed", "posting"].includes(s.state)) continue;
     const due = r.when.getTime();
     if (now - due > GRACE_MS) { await set(r.key, { state: "missed", error: `Not posted: it was due at ${r.date} ${r.time} and the server wasn't ready within 30 min.` }); continue; }
     if (now < due - BUILD_AHEAD_MS) continue;
