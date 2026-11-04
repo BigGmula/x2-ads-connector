@@ -442,8 +442,9 @@ function buildServer() {
       safe_area: z.boolean().default(false).describe("Shrink slides so Instagram's caption and buttons never cover the slide's CTA"),
       voiceover: z.string().optional().describe("Add a female voiceover with the music dipped under it: a script angle (town-callout, direct-question, moms-gift, new-drop, outfit-solved), 'random' (a different angle per variant), or leave empty for music only. Needs product_id."),
       platform: z.enum(["instagram", "facebook"]).default("instagram").describe("Where it will post; sets the spoken call to action (link in bio vs tap the link)"),
+      renderer: z.enum(["ffmpeg", "hyperframes"]).default("ffmpeg").describe("ffmpeg: the standard look (gentle push-in, dissolves). hyperframes: wipes, a zoom into the print and light sweeps; slower and needs more server memory. Not combined with safe_area"),
     },
-  }, wrap(async ({ product_id, slide_urls, variants, music, safe_area, voiceover, platform }: any) => {
+  }, wrap(async ({ product_id, slide_urls, variants, music, safe_area, voiceover, platform, renderer }: any) => {
     let product: SlideSet | undefined;
     let slides: string[];
     if (product_id) {
@@ -465,7 +466,7 @@ function buildServer() {
 
     // Calling again with the same settings returns that build (still running, or finished in the last 30 min)
     // instead of starting another, so clients that can't see get_reel can still collect the result.
-    const key = JSON.stringify([product?.id || slide_urls, variants, music || "", safe_area, voiceover || "", platform]);
+    const key = JSON.stringify([product?.id || slide_urls, variants, music || "", safe_area, voiceover || "", platform, renderer]);
     const recent = reelJobsByKey.get(key);
     if (recent && reelJobs.has(recent.id) && (recent.status === "queued" || recent.status === "building" || (recent.status === "done" && Date.now() - recent.started < 30 * 60_000)))
       return await waitForJob(recent, 20_000);
@@ -478,7 +479,7 @@ function buildServer() {
         const out = [];
         for (let i = 0; i < variants; i++) {
           const script = voiceover ? await fillScript(product!, voiceover, platform) : undefined;
-          const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.text, outPath: path.join(dir, `reel-${i}.mp4`) });
+          const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, renderer, voiceover: script?.text, outPath: path.join(dir, `reel-${i}.mp4`) });
           out.push({
             variant: String.fromCharCode(65 + i),
             video_url: await hostFile(r.path),

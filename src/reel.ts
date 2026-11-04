@@ -13,6 +13,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import ffmpegStatic from "ffmpeg-static";
 import { pickVoice, speak, voiceName, wavSeconds } from "./voice.js";
+import { renderHyperframes } from "./reel-hyperframes.js";
 
 const W = 1080, H = 1920, FPS = 30;
 // Small servers (e.g. Render's 512 MB / 0.5 CPU plan): one filter thread, a faster x264 preset and a lighter
@@ -41,6 +42,7 @@ export type ReelSlide = { src: string; text?: string; seconds?: number };
 export type ReelOptions = {
   slides: ReelSlide[];          // 1-8 images: public URLs, Google Drive links / "drive:<file id>", or local paths
   fit?: "fit" | "blur";         // see top of file; default "fit"
+  renderer?: "ffmpeg" | "hyperframes"; // picture engine; default ffmpeg. hyperframes = wipes and zooms, needs Chrome and Node 22+ (designed slides only)
   motion?: "push" | "kenburns" | "none"; // default: push for fit, kenburns for blur
   safeArea?: boolean;           // shrink slides so nothing sits under Instagram's header, caption or buttons
   transition?: number;          // dissolve length in seconds; default 0.2 (fit) / 0.35 (blur)
@@ -254,83 +256,90 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       return parts.join(",");
     };
 
-    // Each slide (and the end card) is rendered to its own short clip first, one at a time, so only one
-    // slide's frames are ever in memory; the clips are then joined with dissolves in the final pass.
-    const clipFiles: string[] = [];
-    const renderClip = async (clipInputs: string[], filter: string, frames: number) => {
-      const f = `clip${clipFiles.length}.mp4`;
-      await runFfmpeg([...(LOW_POWER ? ["-filter_complex_threads", "1"] : []), ...clipInputs, "-filter_complex", filter, "-map", "[v]",
-        "-frames:v", String(frames), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-g", "1", "-pix_fmt", "yuv420p", "-r", String(FPS),
-        ...(LOW_POWER ? ["-threads", "2"] : []), f], dir);
-      clipFiles.push(f);
-    };
+    if (o.renderer === "hyperframes") {
+      if (fit !== "fit" || hasEnd || o.safeArea || o.hook || o.slides.some((sl) => sl.text))
+        throw new Error("The hyperframes look is for designed slides: no blur look, safe area, hook, captions or end card yet.");
+      await renderHyperframes(dir, "hf.mp4", { slides: slideFiles, durations: dur, transition: Math.max(T, 0.35), accent: brand.accent, highlight: brand.highlight }, ffmpegBin(), LOW_POWER);
+      await writeFile(path.join(dir, "clips.txt"), "file 'hf.mp4'\n");
+    } else {
+      // Each slide (and the end card) is rendered to its own short clip first, one at a time, so only one
+      // slide's frames are ever in memory; the clips are then joined with dissolves in the final pass.
+      const clipFiles: string[] = [];
+      const renderClip = async (clipInputs: string[], filter: string, frames: number) => {
+        const f = `clip${clipFiles.length}.mp4`;
+        await runFfmpeg([...(LOW_POWER ? ["-filter_complex_threads", "1"] : []), ...clipInputs, "-filter_complex", filter, "-map", "[v]",
+          "-frames:v", String(frames), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-g", "1", "-pix_fmt", "yuv420p", "-r", String(FPS),
+          ...(LOW_POWER ? ["-threads", "2"] : []), f], dir);
+        clipFiles.push(f);
+      };
 
-    for (let i = 0; i < n; i++) {
-      const last = i === n - 1 && !hasEnd;
-      const D = dur[i] + (last ? 0 : T), F = Math.round(D * FPS);
-      const pre: string[] = [];
-      let base: string;
-      if (fit === "fit") {
-        // Whole slide, never cropped: fit inside the frame (or the safe area) and pad with its own edge color
-        const pad = await edgeColor(slideFiles[i], dir);
-        const bh = o.safeArea ? H - SAFE_TOP - SAFE_BOTTOM : H, top = o.safeArea ? SAFE_TOP : 0;
-        base = `[0:v]scale=${W}:${bh}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:${top}+(${bh}-ih)/2:color=${pad},setsar=1`;
-        // Push-in reaches 3%: only the outer padding / edge pixels leave the frame
-        base += motion === "none" ? `,zoompan=z='1':d=${F}:s=${W}x${H}:fps=${FPS}`
-          : `,scale=${Math.round(W * SS)}:${Math.round(H * SS)}:flags=lanczos,zoompan=z='1+0.03*(on/${Math.max(F - 1, 1)})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${F}:s=${W}x${H}:fps=${FPS}`;
-      } else {
-        pre.push(
-          `[0:v]format=rgb24,split[a][b]`,
-          `[a]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,boxblur=20:2,eq=brightness=-0.18,scale=${W * 2}:${H * 2}[bg]`,
-          `[b]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=decrease[fg]`,
-        );
-        const z = motion === "none" ? "z='1'" : motion === "push" ? `z='1+0.03*(on/${Math.max(F - 1, 1)})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` : kenBurns(i, F);
-        base = `[bg][fg]overlay=(W-w)/2:(H-h)/2,zoompan=${z}:d=${F}:s=${W}x${H}:fps=${FPS},setsar=1`;
+      for (let i = 0; i < n; i++) {
+        const last = i === n - 1 && !hasEnd;
+        const D = dur[i] + (last ? 0 : T), F = Math.round(D * FPS);
+        const pre: string[] = [];
+        let base: string;
+        if (fit === "fit") {
+          // Whole slide, never cropped: fit inside the frame (or the safe area) and pad with its own edge color
+          const pad = await edgeColor(slideFiles[i], dir);
+          const bh = o.safeArea ? H - SAFE_TOP - SAFE_BOTTOM : H, top = o.safeArea ? SAFE_TOP : 0;
+          base = `[0:v]scale=${W}:${bh}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:${top}+(${bh}-ih)/2:color=${pad},setsar=1`;
+          // Push-in reaches 3%: only the outer padding / edge pixels leave the frame
+          base += motion === "none" ? `,zoompan=z='1':d=${F}:s=${W}x${H}:fps=${FPS}`
+            : `,scale=${Math.round(W * SS)}:${Math.round(H * SS)}:flags=lanczos,zoompan=z='1+0.03*(on/${Math.max(F - 1, 1)})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${F}:s=${W}x${H}:fps=${FPS}`;
+        } else {
+          pre.push(
+            `[0:v]format=rgb24,split[a][b]`,
+            `[a]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,boxblur=20:2,eq=brightness=-0.18,scale=${W * 2}:${H * 2}[bg]`,
+            `[b]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=decrease[fg]`,
+          );
+          const z = motion === "none" ? "z='1'" : motion === "push" ? `z='1+0.03*(on/${Math.max(F - 1, 1)})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` : kenBurns(i, F);
+          base = `[bg][fg]overlay=(W-w)/2:(H-h)/2,zoompan=${z}:d=${F}:s=${W}x${H}:fps=${FPS},setsar=1`;
+        }
+        const texts: string[] = [];
+        // Text sits above and below the photo (over the darkened backdrop), never on the product itself
+        if (i === 0 && o.hook) texts.push(await caption(o.hook, { size: 150, maxChars: 12, yCenter: H * 0.15, start: 0.1 }));
+        const t = o.slides[i].text;
+        if (t) texts.push(await caption(t, { size: 92, maxChars: 16, yCenter: H * (o.safeArea ? 0.7 : 0.8), start: 0.25 }));
+        await renderClip(["-i", slideFiles[i]], [...pre, `${base},format=yuv420p${texts.length ? "," + texts.join(",") : ""}[v]`].join(";"), F);
       }
-      const texts: string[] = [];
-      // Text sits above and below the photo (over the darkened backdrop), never on the product itself
-      if (i === 0 && o.hook) texts.push(await caption(o.hook, { size: 150, maxChars: 12, yCenter: H * 0.15, start: 0.1 }));
-      const t = o.slides[i].text;
-      if (t) texts.push(await caption(t, { size: 92, maxChars: 16, yCenter: H * (o.safeArea ? 0.7 : 0.8), start: 0.25 }));
-      await renderClip(["-i", slideFiles[i]], [...pre, `${base},format=yuv420p${texts.length ? "," + texts.join(",") : ""}[v]`].join(";"), F);
-    }
 
-    // Optional end card: logo, shop URL, discount code, CTA
-    if (hasEnd) {
-      const ec = o.endCard!;
-      const parts: string[] = [];
-      if (ec.shopUrl) parts.push(await caption(`Shop ${ec.shopUrl}`, { size: 88, maxChars: 20, yCenter: H * 0.53, start: 0.2 }));
-      if (ec.code) parts.push(await caption(`Code ${ec.code}`, { size: 80, maxChars: 22, yCenter: H * 0.62, start: 0.45, color: "0x4D7CFF" }));
-      if (ec.cta) parts.push(await caption(ec.cta, { size: 60, maxChars: 20, yCenter: H * 0.71, start: 0.7, color: brand.highlight }));
-      const g = [`color=c=${brand.background}:s=${W}x${H}:r=${FPS}:d=${E},format=yuv420p[ecbg]`];
-      let ecIn = "ecbg";
-      if (logoFile) {
-        g.push(`[0:v]scale=720:480:force_original_aspect_ratio=decrease,format=rgba[logo]`, `[ecbg][logo]overlay=(W-w)/2:${Math.round(H * 0.2)}:shortest=1[eclogo]`);
-        ecIn = "eclogo";
+      // Optional end card: logo, shop URL, discount code, CTA
+      if (hasEnd) {
+        const ec = o.endCard!;
+        const parts: string[] = [];
+        if (ec.shopUrl) parts.push(await caption(`Shop ${ec.shopUrl}`, { size: 88, maxChars: 20, yCenter: H * 0.53, start: 0.2 }));
+        if (ec.code) parts.push(await caption(`Code ${ec.code}`, { size: 80, maxChars: 22, yCenter: H * 0.62, start: 0.45, color: "0x4D7CFF" }));
+        if (ec.cta) parts.push(await caption(ec.cta, { size: 60, maxChars: 20, yCenter: H * 0.71, start: 0.7, color: brand.highlight }));
+        const g = [`color=c=${brand.background}:s=${W}x${H}:r=${FPS}:d=${E},format=yuv420p[ecbg]`];
+        let ecIn = "ecbg";
+        if (logoFile) {
+          g.push(`[0:v]scale=720:480:force_original_aspect_ratio=decrease,format=rgba[logo]`, `[ecbg][logo]overlay=(W-w)/2:${Math.round(H * 0.2)}:shortest=1[eclogo]`);
+          ecIn = "eclogo";
+        }
+        g.push(`[${ecIn}]${parts.length ? parts.join(",") + "," : ""}setsar=1,fps=${FPS},format=yuv420p[v]`);
+        await renderClip(logoFile ? ["-loop", "1", "-t", String(E), "-i", logoFile] : [], g.join(";"), Math.round(E * FPS));
       }
-      g.push(`[${ecIn}]${parts.length ? parts.join(",") + "," : ""}setsar=1,fps=${FPS},format=yuv420p[v]`);
-      await renderClip(logoFile ? ["-loop", "1", "-t", String(E), "-i", logoFile] : [], g.join(";"), Math.round(E * FPS));
-    }
 
-    // Join with short dissolves without holding every clip in memory: each dissolve is rendered as its own tiny
-    // clip from the two neighbours, then all pieces are played end to end (clip0, fade, clip1, fade, ...).
-    // Clips are all-intra, so the concat in/out points are frame-exact.
-    const clips = clipFiles.length;
-    const list: string[] = [];
-    const durOf = (k: number) => (k < n ? dur[k] : E);
-    for (let k = 0; k < clips; k++) {
-      list.push(`file '${clipFiles[k]}'`);
-      if (k > 0) list.push(`inpoint ${T.toFixed(3)}`);
-      if (k < clips - 1) {
-        list.push(`outpoint ${durOf(k).toFixed(3)}`);
-        const f = `fade${k}.mp4`;
-        await runFfmpeg(["-ss", durOf(k).toFixed(3), "-t", T.toFixed(3), "-i", clipFiles[k], "-t", T.toFixed(3), "-i", clipFiles[k + 1],
-          "-filter_complex", `[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=${FPS}[a];[1:v]settb=AVTB,setpts=PTS-STARTPTS,fps=${FPS}[b];[a][b]xfade=transition=fade:duration=${T}:offset=0,format=yuv420p[v]`,
-          "-map", "[v]", "-frames:v", String(Math.round(T * FPS)), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-g", "1", "-r", String(FPS), f], dir);
-        list.push(`file '${f}'`);
+      // Join with short dissolves without holding every clip in memory: each dissolve is rendered as its own tiny
+      // clip from the two neighbours, then all pieces are played end to end (clip0, fade, clip1, fade, ...).
+      // Clips are all-intra, so the concat in/out points are frame-exact.
+      const clips = clipFiles.length;
+      const list: string[] = [];
+      const durOf = (k: number) => (k < n ? dur[k] : E);
+      for (let k = 0; k < clips; k++) {
+        list.push(`file '${clipFiles[k]}'`);
+        if (k > 0) list.push(`inpoint ${T.toFixed(3)}`);
+        if (k < clips - 1) {
+          list.push(`outpoint ${durOf(k).toFixed(3)}`);
+          const f = `fade${k}.mp4`;
+          await runFfmpeg(["-ss", durOf(k).toFixed(3), "-t", T.toFixed(3), "-i", clipFiles[k], "-t", T.toFixed(3), "-i", clipFiles[k + 1],
+            "-filter_complex", `[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps=${FPS}[a];[1:v]settb=AVTB,setpts=PTS-STARTPTS,fps=${FPS}[b];[a][b]xfade=transition=fade:duration=${T}:offset=0,format=yuv420p[v]`,
+            "-map", "[v]", "-frames:v", String(Math.round(T * FPS)), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-g", "1", "-r", String(FPS), f], dir);
+          list.push(`file '${f}'`);
+        }
       }
+      await writeFile(path.join(dir, "clips.txt"), list.join("\n") + "\n");
     }
-    await writeFile(path.join(dir, "clips.txt"), list.join("\n") + "\n");
 
     // Audio is mixed in its own small steps. Loudness is measured (ebur128) and corrected with a fixed gain
     // instead of loudnorm, which needs ~120 MB per instance. Final mix lands around -14 LUFS (where Instagram

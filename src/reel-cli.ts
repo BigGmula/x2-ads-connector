@@ -3,7 +3,7 @@
 //   npm run reel -- P25 P17                     products from reels/slide-sets.json
 //   npm run reel -- --all                       every product with a slide set (HOLD ones included, marked in the name)
 //   npm run reel -- P25 --vo each --platform facebook   add a voiceover (an angle from reels/voiceover-scripts.json, random, or each)
-// Job file: { name, outDir?, slides: [{src, text?, seconds?}], fit?, motion?, safeArea?, transition?,
+// Job file: { name, outDir?, slides: [{src, text?, seconds?}], renderer?: "ffmpeg" | "hyperframes", brand?, fit?, motion?, safeArea?, transition?,
 //             hooks?: [..], music?: [..] | false, variants?, musicStart?, secondsPerSlide?, endCard?: {logo?, shopUrl?, code?, cta?},
 //             voiceover?: "script read in one take" }
 // Slide src: local path (relative to the job file), public URL, Google Drive link, or "drive:<file id>"
@@ -28,7 +28,7 @@ if (args[0].endsWith(".json")) {
   const results = await buildReelVariants(
     {
       slides: job.slides.map((s: any) => ({ ...s, src: local(s.src) })),
-      fit: job.fit, motion: job.motion, safeArea: job.safeArea, transition: job.transition,
+      fit: job.fit, renderer: job.renderer, brand: job.brand, motion: job.motion, safeArea: job.safeArea, transition: job.transition,
       endCard: job.endCard && { ...job.endCard, logo: local(job.endCard.logo) },
       musicStart: job.musicStart,
       secondsPerSlide: job.secondsPerSlide,
