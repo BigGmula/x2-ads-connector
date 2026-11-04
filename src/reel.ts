@@ -12,8 +12,8 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import ffmpegStatic from "ffmpeg-static";
-import { pickVoice, speak, voiceName, wavSeconds } from "./voice.js";
-import { renderHyperframes } from "./reel-hyperframes.js";
+import { pickVoice, speak, transcribeWords, voiceName, wavSeconds } from "./voice.js";
+import { alignWords, beatTimes, captionTimes, renderHyperframes, snapDurations, type CaptionWord } from "./reel-hyperframes.js";
 
 const W = 1080, H = 1920, FPS = 30;
 // Small servers (e.g. Render's 512 MB / 0.5 CPU plan): one filter thread, a faster x264 preset and a lighter
@@ -51,15 +51,18 @@ export type ReelOptions = {
   music?: string;               // URL or local path to a track the business owns or licenses
   musicStart?: number;          // seconds into the track to start; default: where the beat is in full swing
   voiceover?: string;           // script to speak as one continuous take; the music dips under the voice
-  voice?: string;               // ElevenLabs voice ID or name (zara, brielle, lyan); default: one from the rotation
+  voice?: string;               // ElevenLabs voice ID or name (hayley, elena, liz); default: one from the rotation
   voiceoverAudio?: string;      // a voiceover already recorded (.wav), used instead of speaking `voiceover`
+  voiceoverWords?: CaptionWord[]; // word timings of that recording, so it needn't be transcribed
+  captions?: boolean;           // hyperframes look: word-by-word captions; default on when there's a voiceover
+  beatSync?: boolean;           // hyperframes look: land the wipes on the beat; default on when there's music
   secondsPerSlide?: number;     // for slides without their own `seconds`; a 5-slide fit set uses SET_TIMING
   endCardSeconds?: number;      // default 3
   outPath: string;              // where to write the .mp4 (a cover .jpg is written beside it)
   brand?: Partial<Brand>;
 };
 
-export type ReelResult = { path: string; cover: string; duration: number; slides: number; voice?: string };
+export type ReelResult = { path: string; cover: string; duration: number; slides: number; voice?: string; captions?: boolean; warning?: string };
 
 // ---------- helpers ----------
 const ffmpegBin = () => {
@@ -256,10 +259,69 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       return parts.join(",");
     };
 
+    // Audio is mixed in its own small steps. Loudness is measured (ebur128) and corrected with a fixed gain
+    // instead of loudnorm, which needs ~120 MB per instance. Final mix lands around -14 LUFS (where Instagram
+    // plays) and is limited so phones never clip.
+    const STEREO = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
+    const gainTo = async (file: string, target: number) => {
+      const I = await measureLufs(file, dir);
+      return I === undefined ? 0 : Math.max(-20, Math.min(20, target - I));
+    };
+    const vo = o.voiceover?.trim() || (o.voiceoverAudio ? "(recorded)" : "");
+    const voice = o.voiceover?.trim() ? o.voice || pickVoice() : undefined;
+
+    // Music bed: the track trimmed to length and faded; silence if no track
+    if (musicFile) {
+      const start = o.musicStart ?? (await autoMusicStart(musicFile, dir, total));
+      await runFfmpeg(["-stream_loop", "-1", "-ss", start.toFixed(2), "-i", musicFile, "-af",
+        `atrim=0:${total},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,afade=t=out:st=${Math.max(total - 1.2, 0)}:d=1.2,${STEREO}`,
+        "-c:a", "pcm_f32le", "mus.wav"], dir);
+    } else {
+      await runFfmpeg(["-f", "lavfi", "-i", `anullsrc=r=48000:cl=stereo`, "-t", String(total), "-c:a", "pcm_f32le", "mus.wav"], dir);
+    }
+    let mixFile = "mus.wav";
+    let captionWords: CaptionWord[] = [];
+    let warning: string | undefined;
+
+    // Voiceover: the whole script recorded as ONE continuous take, so it flows like a real voice actor's read.
+    // It starts just after the reel opens and is sped up only if it would run past the end (at most 1.12x,
+    // beyond that it starts sounding rushed). The music ducks under the voice.
+    if (vo.length) {
+      if (o.voiceoverAudio) await copyFile(path.resolve(o.voiceoverAudio), path.join(dir, "raw.wav"));
+      else await speak(vo, path.join(dir, "raw.wav"), voice);
+      const trim = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03";
+      await runFfmpeg(["-i", "raw.wav", "-af", `${trim},areverse,${trim},areverse`, "-c:a", "pcm_s16le", "vo.wav"], dir);
+      const secs = wavSeconds(await readFile(path.join(dir, "vo.wav")));
+      const START = 0.3, room = total - START - 0.45;
+      const tempo = secs > room ? secs / room : 1;
+      if (tempo > 1.12) throw new Error(`The voiceover runs ${secs.toFixed(1)}s, too long for a ${total}s reel. Shorten the script.`);
+      if (o.renderer === "hyperframes" && o.captions !== false) {
+        try {
+          const heard = o.voiceoverWords ?? (await transcribeWords(path.join(dir, "vo.wav")));
+          captionWords = captionTimes(alignWords(heard, o.voiceover), START, tempo);
+        } catch (e) {
+          warning = `Built without captions: ${(e as Error).message}`;
+        }
+      }
+      const ms = Math.round(START * 1000);
+      await runFfmpeg(["-i", "vo.wav", "-af", `${STEREO}${tempo > 1.001 ? `,atempo=${tempo.toFixed(3)}` : ""},adelay=${ms}|${ms},apad,atrim=0:${total},highpass=f=90`,
+        "-c:a", "pcm_f32le", "vop.wav"], dir);
+      const gm = await gainTo("mus.wav", -20), gv = await gainTo("vop.wav", -15);
+      await runFfmpeg(["-i", "mus.wav", "-i", "vop.wav", "-filter_complex",
+        `[0:a]volume=${gm.toFixed(2)}dB[mus];[1:a]volume=${gv.toFixed(2)}dB,asplit[voa][vob];` +
+        `[mus][voa]sidechaincompress=threshold=0.012:ratio=10:attack=15:release=450:makeup=1[duck];` +
+        `[duck][vob]amix=inputs=2:normalize=0:duration=first,${STEREO}[a]`,
+        "-map", "[a]", "-c:a", "pcm_f32le", "mix.wav"], dir);
+      mixFile = "mix.wav";
+    }
+    const gf = musicFile || vo.length ? await gainTo(mixFile, -14) : 0;
+
     if (o.renderer === "hyperframes") {
       if (fit !== "fit" || hasEnd || o.safeArea || o.hook || o.slides.some((sl) => sl.text))
         throw new Error("The hyperframes look is for designed slides: no blur look, safe area, hook, captions or end card yet.");
-      await renderHyperframes(dir, "hf.mp4", { slides: slideFiles, durations: dur, transition: Math.max(T, 0.35), accent: brand.accent, highlight: brand.highlight }, ffmpegBin(), LOW_POWER);
+      const HT = Math.max(T, 0.35);
+      const beats = musicFile && o.beatSync !== false ? await beatTimes(dir, "mus.wav") : [];
+      await renderHyperframes(dir, "hf.mp4", { slides: slideFiles, durations: snapDurations(dur, beats), transition: HT, accent: brand.accent, highlight: brand.highlight, captions: captionWords }, ffmpegBin(), LOW_POWER);
       await writeFile(path.join(dir, "clips.txt"), "file 'hf.mp4'\n");
     } else {
       // Each slide (and the end card) is rendered to its own short clip first, one at a time, so only one
@@ -341,53 +403,6 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
       await writeFile(path.join(dir, "clips.txt"), list.join("\n") + "\n");
     }
 
-    // Audio is mixed in its own small steps. Loudness is measured (ebur128) and corrected with a fixed gain
-    // instead of loudnorm, which needs ~120 MB per instance. Final mix lands around -14 LUFS (where Instagram
-    // plays) and is limited so phones never clip.
-    const STEREO = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
-    const gainTo = async (file: string, target: number) => {
-      const I = await measureLufs(file, dir);
-      return I === undefined ? 0 : Math.max(-20, Math.min(20, target - I));
-    };
-    const vo = o.voiceover?.trim() || (o.voiceoverAudio ? "(recorded)" : "");
-    const voice = o.voiceover?.trim() ? o.voice || pickVoice() : undefined;
-
-    // Music bed: the track trimmed to length and faded; silence if no track
-    if (musicFile) {
-      const start = o.musicStart ?? (await autoMusicStart(musicFile, dir, total));
-      await runFfmpeg(["-stream_loop", "-1", "-ss", start.toFixed(2), "-i", musicFile, "-af",
-        `atrim=0:${total},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,afade=t=out:st=${Math.max(total - 1.2, 0)}:d=1.2,${STEREO}`,
-        "-c:a", "pcm_f32le", "mus.wav"], dir);
-    } else {
-      await runFfmpeg(["-f", "lavfi", "-i", `anullsrc=r=48000:cl=stereo`, "-t", String(total), "-c:a", "pcm_f32le", "mus.wav"], dir);
-    }
-    let mixFile = "mus.wav";
-
-    // Voiceover: the whole script recorded as ONE continuous take, so it flows like a real voice actor's read.
-    // It starts just after the reel opens and is sped up only if it would run past the end (at most 1.12x,
-    // beyond that it starts sounding rushed). The music ducks under the voice.
-    if (vo.length) {
-      if (o.voiceoverAudio) await copyFile(path.resolve(o.voiceoverAudio), path.join(dir, "raw.wav"));
-      else await speak(vo, path.join(dir, "raw.wav"), voice);
-      const trim = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03";
-      await runFfmpeg(["-i", "raw.wav", "-af", `${trim},areverse,${trim},areverse`, "-c:a", "pcm_s16le", "vo.wav"], dir);
-      const secs = wavSeconds(await readFile(path.join(dir, "vo.wav")));
-      const START = 0.3, room = total - START - 0.45;
-      const tempo = secs > room ? secs / room : 1;
-      if (tempo > 1.12) throw new Error(`The voiceover runs ${secs.toFixed(1)}s, too long for a ${total}s reel. Shorten the script.`);
-      const ms = Math.round(START * 1000);
-      await runFfmpeg(["-i", "vo.wav", "-af", `${STEREO}${tempo > 1.001 ? `,atempo=${tempo.toFixed(3)}` : ""},adelay=${ms}|${ms},apad,atrim=0:${total},highpass=f=90`,
-        "-c:a", "pcm_f32le", "vop.wav"], dir);
-      const gm = await gainTo("mus.wav", -20), gv = await gainTo("vop.wav", -15);
-      await runFfmpeg(["-i", "mus.wav", "-i", "vop.wav", "-filter_complex",
-        `[0:a]volume=${gm.toFixed(2)}dB[mus];[1:a]volume=${gv.toFixed(2)}dB,asplit[voa][vob];` +
-        `[mus][voa]sidechaincompress=threshold=0.012:ratio=10:attack=15:release=450:makeup=1[duck];` +
-        `[duck][vob]amix=inputs=2:normalize=0:duration=first,${STEREO}[a]`,
-        "-map", "[a]", "-c:a", "pcm_f32le", "mix.wav"], dir);
-      mixFile = "mix.wav";
-    }
-    const gf = musicFile || vo.length ? await gainTo(mixFile, -14) : 0;
-
     await runFfmpeg([
       ...(LOW_POWER ? ["-filter_complex_threads", "1"] : []),
       "-f", "concat", "-safe", "0", "-i", "clips.txt", "-i", mixFile,
@@ -401,7 +416,7 @@ export async function buildReel(o: ReelOptions): Promise<ReelResult> {
 
     // Cover = first slide (the hook / hero) for previews and the Instagram cover
     await runFfmpeg(["-ss", fit === "fit" ? "0.5" : "0.8", "-i", outPath, "-frames:v", "1", "-q:v", "2", cover], dir);
-    return { path: outPath, cover, duration: total, slides: n, ...(voice ? { voice: voiceName(voice) } : {}) };
+    return { path: outPath, cover, duration: total, slides: n, ...(voice ? { voice: voiceName(voice) } : {}), ...(captionWords.length ? { captions: true } : {}), ...(warning ? { warning } : {}) };
   } finally {
     if (process.env.REEL_KEEP_TMP) console.error(`kept ${dir}`);
     else await rm(dir, { recursive: true, force: true });

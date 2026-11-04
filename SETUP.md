@@ -76,10 +76,10 @@ npm run build && node --env-file=.env dist/index.js
 
 ## Step 5 — Voiceovers (optional, ~10 min)
 
-Reels can have a woman's voice reading a short script (from `reels/voiceover-scripts.json`) with the music dipped underneath. Voices come from ElevenLabs. Three hyper-natural female voices rotate (Zara, Brielle, Lyan) so the performance report shows which one sells.
+Reels can have a woman's voice reading a short script (from `reels/voiceover-scripts.json`) with the music dipped underneath. Voices come from ElevenLabs. Three creator-style female voices rotate (Hayley, Elena, Liz) so the performance report shows which one sells.
 
 1. ElevenLabs needs a **paid plan (Starter or higher)** for commercial use of the audio in ads and business posts.
-2. In ElevenLabs, open **Voices → Voice Library** and add **Zara – The Warm, Real-World Conversationalist**, **Brielle – podcast girl extremely natural** and **Lyan – Female Genuine Casual Ads** to **My Voices** (the API can only use voices you've added).
+2. In ElevenLabs, open **Voices → Voice Library** and add **Hayley - Natural TikTok & UGC**, **Elena - Young, upbeat social creator** and **Liz – Social Media & Ad - Youtube - TikTok** to **My Voices** (the API can only use voices you've added).
 3. **Developers → API Keys → Create API key** (Text to Speech access is enough). Copy it.
 4. Put it in `ELEVENLABS_API_KEY` (in Render's environment variables, and in a local `.env` file to build reels on your computer).
 

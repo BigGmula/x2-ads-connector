@@ -28,7 +28,7 @@ if (args[0].endsWith(".json")) {
   const results = await buildReelVariants(
     {
       slides: job.slides.map((s: any) => ({ ...s, src: local(s.src) })),
-      fit: job.fit, renderer: job.renderer, brand: job.brand, motion: job.motion, safeArea: job.safeArea, transition: job.transition,
+      fit: job.fit, renderer: job.renderer, brand: job.brand, captions: job.captions, beatSync: job.beatSync, voiceoverAudio: local(job.voiceoverAudio), voiceoverWords: job.voiceoverWords, motion: job.motion, safeArea: job.safeArea, transition: job.transition,
       endCard: job.endCard && { ...job.endCard, logo: local(job.endCard.logo) },
       musicStart: job.musicStart,
       secondsPerSlide: job.secondsPerSlide,

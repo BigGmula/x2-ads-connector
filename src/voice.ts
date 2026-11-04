@@ -4,12 +4,12 @@
 import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 
-// Hyper-natural female voices from the ElevenLabs library, picked for women's apparel ads (young women + moms).
-// Reels rotate between them so the performance report shows which one sells; override with ELEVENLABS_VOICE_IDS.
+// Creator-style (UGC) American female voices: research points to creator-led ads, not one proven voice, so reels
+// rotate between these and the performance report shows which one sells; override with ELEVENLABS_VOICE_IDS.
 export const VOICES: Record<string, string> = {
-  zara: "jqcCZkN6Knx8BJ5TBdYR",    // warm, real-world conversationalist, 20s-30s
-  brielle: "6u6JbqKdaQy89ENzLSju", // natural Gen Z, "un-clockable"
-  lyan: "PStJ2DzQnh8zxG5PDf1s",    // genuine, casual DTC ad read
+  hayley: "gpmRbxMkenLwiGmvYotk", // relatable, upbeat product-review creator
+  elena: "w4DBBAtZhQtfCihqCw5b",  // natural young adult, unforced pacing
+  liz: "1Hdh5sdoicm1xyz0gQhD",    // conversational with a little ad polish
 };
 const DEFAULT_MODEL = "eleven_v4"; // newest, most human-sounding ElevenLabs model
 
@@ -75,6 +75,19 @@ async function elevenlabs(text: string, outFile: string, voice?: string, ctx: Sp
     throw new Error(`ElevenLabs failed (${res.status}): ${msg}${res.status === 404 || /voice/i.test(msg) ? " (add the voice to My Voices in ElevenLabs first)" : ""}`);
   }
   await writeFile(outFile, wav(Buffer.from(await res.arrayBuffer())));
+}
+
+// Word timings for a recording, from ElevenLabs speech-to-text (no local model, so it adds no server memory)
+export async function transcribeWords(file: string): Promise<{ text: string; start: number; end: number }[]> {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) throw new Error("ELEVENLABS_API_KEY is not set.");
+  const form = new FormData();
+  form.append("model_id", "scribe_v1");
+  form.append("file", new Blob([await readFile(file)], { type: "audio/wav" }), "voiceover.wav");
+  const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": key }, body: form });
+  if (!res.ok) throw new Error(`ElevenLabs speech-to-text failed (${res.status}).`);
+  const j: any = await res.json();
+  return (j.words || []).filter((w: any) => w.type === "word").map((w: any) => ({ text: w.text, start: w.start, end: w.end }));
 }
 
 function windows(text: string, outFile: string) {
