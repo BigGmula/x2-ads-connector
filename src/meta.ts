@@ -102,6 +102,24 @@ export const meta = {
     return j;
   },
   igComment: (mediaId: string, message: string) => call("POST", `${mediaId}/comments`, { message }),
+  fbPostPublished: async (postId: string, pageToken: string) => {
+    const res = await fetch(`${BASE}/${postId}?fields=is_published&access_token=${encodeURIComponent(pageToken)}`);
+    const j: any = await res.json();
+    if (!res.ok || j.error) throw new Error(`Facebook post check failed: ${j.error?.message || res.statusText}`);
+    return j.is_published !== false;
+  },
+  // Page's recent posts with whether the Page itself has commented (i.e. the link comment is there)
+  fbRecentPosts: async (pageId: string, pageToken: string, limit = 25) => {
+    const fields = "id,message,created_time,permalink_url,is_published,comments.limit(25){from{id},message}";
+    const res = await fetch(`${BASE}/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${encodeURIComponent(pageToken)}`);
+    const j: any = await res.json();
+    if (!res.ok || j.error) throw new Error(`Facebook posts lookup failed: ${j.error?.message || res.statusText}`);
+    return (j.data || []).map((p: any) => {
+      const own = (p.comments?.data || []).filter((c: any) => c.from?.id === pageId);
+      return { post_id: p.id, created_time: p.created_time, permalink: p.permalink_url, caption: (p.message || "").slice(0, 160),
+        page_comment: own[0]?.message || null, has_link_comment: own.some((c: any) => /https?:\/\//.test(c.message || "")) };
+    });
+  },
 
   // Instagram feed post: create container, wait until ready, publish
   igPhotoPost: async (igId: string, token: string, imageUrl: string, caption: string) => {

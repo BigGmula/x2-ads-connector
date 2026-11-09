@@ -13,6 +13,7 @@ import { buildReel, listTracks, pickTracks, driveDownloadUrl } from "./reel.js";
 import { hostFile, mediaRoutes } from "./hosting.js";
 import { dashboardRoutes } from "./dashboard.js";
 import { fillScript } from "./scripts.js";
+import { queueComment, pendingComments, startCommentSweeper } from "./pending-comments.js";
 import { startScheduler, readSchedule, scheduleState, scheduleSheetUrl, isApproved, type SchedulerDeps } from "./scheduler.js";
 
 // ---------- Safety rails ----------
@@ -150,7 +151,11 @@ async function publishPhotoWork(page_id: string, { image_url, caption, platforms
       const r = await meta.fbPhotoPost(page_id, page.access_token, image_url, caption, when);
       const postId = r.post_id || r.id;
       out.facebook = { post_id: postId, scheduled: !!when };
-      if (first_comment && !when) {
+      if (first_comment && when) {
+        // Facebook refuses comments on posts that aren't live yet; the sweeper posts it once this goes live
+        await queueComment({ post_id: postId, page_id, message: first_comment, due: when * 1000 });
+        (out.facebook as any).first_comment = "queued: posts automatically when the post goes live";
+      } else if (first_comment) {
         try { await meta.fbComment(postId, page.access_token, first_comment); (out.facebook as any).first_comment = "posted"; }
         catch (e) { (out.facebook as any).first_comment = (e as Error).message; }
       }
@@ -292,7 +297,7 @@ function buildServer() {
   const s = new McpServer({ name: "x2-ads-connector", version: "1.0.0" });
 
   // Tag every tool read-only vs write so Claude (and the directory) know which ones change things
-  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords", "build_reel", "publish_reel",
+  const WRITES = new Set(["meta_create_campaign", "meta_set_status", "meta_set_daily_budget", "google_set_campaign_status", "google_set_daily_budget", "google_add_negative_keywords", "build_reel", "publish_reel", "meta_publish_post", "meta_add_comment",
     "google_create_campaign", "google_create_ad_group", "google_add_keywords", "google_create_responsive_search_ad", "google_add_location_targets", "google_build_search_campaign"]);
   const reg = s.registerTool.bind(s) as any;
   (s as any).registerTool = (name: string, cfg: any, cb: any) =>
@@ -411,12 +416,32 @@ function buildServer() {
       caption: z.string().min(1).max(2200),
       platforms: z.array(z.enum(["facebook", "instagram"])).default(["facebook", "instagram"]),
       instagram_caption: z.string().max(2200).optional().describe("Optional different caption for Instagram"),
-      schedule_at: z.string().optional().describe("ISO time to schedule the Facebook post, e.g. 2026-10-28T11:30:00-04:00. Scheduled posts can't get a first comment."),
-      first_comment: z.string().max(2200).optional().describe("Auto-posted as the first comment on each published post, e.g. 'Shop here 👉 <product link>'. Links are clickable in Facebook comments, not Instagram."),
+      schedule_at: z.string().optional().describe("ISO time to schedule the Facebook post, e.g. 2026-10-28T11:30:00-04:00. The first comment still goes on: it's queued and posted automatically the minute the post goes live."),
+      first_comment: z.string().max(2200).optional().describe("Always include the product link here, e.g. 'Shop here: <product link>'. Posted as the first comment on every post, scheduled ones included. Links are clickable in Facebook comments, not Instagram."),
     },
   }, wrap(async ({ page_id, ...post }: any) => {
     guardWrite();
     return await publishPhotoWork(page_id, post);
+  }));
+
+  s.registerTool("meta_recent_posts", {
+    title: "Meta: recent Facebook posts + link-comment check",
+    description: "List a Facebook Page's recent posts with whether each has the Page's own link comment (has_link_comment), plus the first comments still queued for scheduled posts. Use it to find posts missing their link.",
+    inputSchema: { page_id: z.string().optional(), limit: z.number().int().min(1).max(100).default(25) },
+  }, wrap(async ({ page_id, limit }: any) => {
+    const id = page_id || defaultPage();
+    const page = await meta.pageInfo(id);
+    return { page: page.name, posts: await meta.fbRecentPosts(id, page.access_token, limit), queued_comments: await pendingComments() };
+  }));
+
+  s.registerTool("meta_add_comment", {
+    title: "Meta: add a comment to a Facebook post",
+    description: "Post a comment as the Page on one of its live Facebook posts, e.g. the product link a post is missing. Use meta_recent_posts to find post_ids.",
+    inputSchema: { post_id: z.string(), message: z.string().min(1).max(2200), page_id: z.string().optional() },
+  }, wrap(async ({ post_id, message, page_id }: any) => {
+    guardWrite();
+    const page = await meta.pageInfo(page_id || defaultPage());
+    return await meta.fbComment(post_id, page.access_token, message);
   }));
 
   // ===== REELS =====
@@ -849,3 +874,8 @@ app.all("/mcp/:secret", (_req, res) => res.status(405).set("Allow", "POST").end(
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => console.log(`x2 ads connector listening on :${PORT} (read-only: ${READ_ONLY}, budget cap: $${MAX_DAILY_BUDGET}/day)`));
 startScheduler(schedulerDeps);
+startCommentSweeper({
+  pageToken: async (id) => (await meta.pageInfo(id)).access_token,
+  isPublished: (postId, token) => meta.fbPostPublished(postId, token),
+  comment: (postId, token, message) => meta.fbComment(postId, token, message),
+});
