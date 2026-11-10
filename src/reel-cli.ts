@@ -5,7 +5,7 @@
 //   npm run reel -- P25 --vo each --platform facebook   add a voiceover (an angle from reels/voiceover-scripts.json, random, or each)
 // Job file: { name, outDir?, slides: [{src, text?, seconds?}], fit?, motion?, safeArea?, transition?,
 //             hooks?: [..], music?: [..] | false, variants?, musicStart?, secondsPerSlide?, endCard?: {logo?, shopUrl?, code?, cta?},
-//             voiceover?: "script read in one take" }
+//             voiceover?: "script read in one take", voice?: "zara" | "brielle" | "lyan" | <ElevenLabs voice ID> }
 // Slide src: local path (relative to the job file), public URL, Google Drive link, or "drive:<file id>"
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -31,6 +31,7 @@ if (args[0].endsWith(".json")) {
       fit: job.fit, motion: job.motion, safeArea: job.safeArea, transition: job.transition,
       endCard: job.endCard && { ...job.endCard, logo: local(job.endCard.logo) },
       musicStart: job.musicStart,
+      voice: job.voice,
       secondsPerSlide: job.secondsPerSlide,
     },
     job.hooks || (job.hook ? [job.hook] : []),
@@ -41,7 +42,7 @@ if (args[0].endsWith(".json")) {
     job.voiceover ? 1 : undefined,
     job.voiceover ? [job.voiceover] : [],
   );
-  for (const r of results) console.log(`${r.variant}: ${r.path} (${r.duration}s)${r.hook ? ` hook="${r.hook}"` : ""}${r.music ? ` music=${path.basename(r.music)}` : ""}`);
+  for (const r of results) console.log(`${r.variant}: ${r.path} (${r.duration}s)${r.hook ? ` hook="${r.hook}"` : ""}${r.music ? ` music=${path.basename(r.music)}` : ""}${r.voice ? ` voice=${r.voice}` : ""}`);
 } else {
   // Flags: --vo <angle | random | each>  (each = one version per script angle)   --platform instagram|facebook
   const flag = (name: string) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : undefined; };
