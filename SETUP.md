@@ -104,8 +104,9 @@ The connector posts on its own from a Google Sheet, one row per reel or photo po
 | first_comment | Override the first comment (default: the product link) |
 | media | Reel: slide image links (Drive, in order) to build from. Post: the image link |
 | video, cover | A finished reel MP4 (and cover image) to post as is, with no build |
-| voiceover | A script angle (`town-callout`, `direct-question`, `moms-gift`, `new-drop`, `outfit-solved`, `random`) |
+| voiceover | A script angle (`town-callout`, `direct-question`, `moms-gift`, `new-drop`, `outfit-solved`, `random`), or the script itself written out as a sentence (45 words or fewer), spoken in the brand's voice |
 | music | A track from `music/` (e.g. `baileys.mp3`), `none`, or empty for a random one |
+| page | Which brand the row posts to: `wallvice`, or a Facebook Page ID. Empty = 47 Swag Co. The column can also be called `brand` (see Step 8) |
 | status | `approved` to post |
 
 - Reels that need building start 25 minutes before their time. A row that's more than 30 minutes late (server down) is skipped, not posted late.
@@ -120,6 +121,23 @@ Open **https://x2-ads-connector.onrender.com/app** to see the schedule, approve 
 1. In Render, add `DASHBOARD_PASSWORD` (any password you'll remember). Without it, the password is `CONNECTOR_SECRET`.
 2. **Install it as an app:** on a PC, open the link in Chrome or Edge and click the install icon in the address bar (or menu → *Install 47 Studio*). On an iPhone, Safari → Share → *Add to Home Screen*; on Android, Chrome menu → *Install app*.
 3. **Approve / Skip** in the app wins over the sheet's status column. Those choices are kept on the server's disk, which Render wipes on each deploy, so add a Render **Disk** (1 GB, mount path `/var/data`) and set `SCHEDULE_STATE_FILE=/var/data/schedule-state.json` to keep them. Without a disk, a deploy resets app approvals (rows then go back to what the sheet says; nothing extra gets posted).
+
+## Step 8 — Another brand (Wallvice)
+
+The connector posts for more than one brand. Each brand is an entry in `reels/brands.json`: its Facebook Page (the linked Instagram account comes with it), its voiceover voice and its closing card.
+
+**Meta access (done once per brand).** The connector's login is the system user **Connector** in the 47 Swag Co business portfolio. For a Page owned by another portfolio (Wallvice has its own):
+
+1. In the Page's own portfolio: **Settings → Pages → the Page → Assign partner → Business ID** → the 47 Swag Co portfolio ID → turn on **Content**, **Community activity** and **Insights**.
+2. In the 47 Swag Co portfolio: **Settings → System users → Connector → ⋯ → Assign assets → Facebook Pages** → the Page → the same three permissions.
+3. Ask Claude to "list my pages" (`meta_list_pages`): the Page and its Instagram account should show. No new token is needed.
+
+**Using it.**
+
+- Post a finished reel: `publish_reel` with `brand: "wallvice"`. The first comment defaults to the brand's site; pass `first_comment` with the exact product link.
+- Build a reel: `build_reel` with `brand: "wallvice"`, `slide_urls` and `voiceover_text`. The script is read by the brand's voice (Doug Hamilton for Wallvice; the voice has to be in **My Voices** on the ElevenLabs account behind `ELEVENLABS_API_KEY`) and the reel ends on the brand's closing card (`reels/brand/wallvice-end-card.png`).
+- Schedule sheet: put `wallvice` in the row's `page` column.
+- To change a brand's closing card, replace its image file (1080x1920) or point `end_slide` at a Drive link.
 
 ## Notes
 

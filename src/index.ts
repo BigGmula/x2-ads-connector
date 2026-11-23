@@ -13,6 +13,7 @@ import { buildReel, listTracks, pickTracks, driveDownloadUrl } from "./reel.js";
 import { hostFile, mediaRoutes } from "./hosting.js";
 import { dashboardRoutes } from "./dashboard.js";
 import { fillScript } from "./scripts.js";
+import { loadBrands, matchBrand, pageIdFor, customScript, brandLook } from "./brands.js";
 import { queueComment, pendingComments, startCommentSweeper } from "./pending-comments.js";
 import { startScheduler, readSchedule, scheduleState, scheduleSheetUrl, isApproved, type SchedulerDeps } from "./scheduler.js";
 
@@ -241,6 +242,13 @@ async function publishReelWork(p: ReelPost) {
 // Rows in the schedule sheet are posted with the same code as the publish tools; see scheduler.ts
 const findProduct = async (id?: string) => (id ? (await slideSets()).find((p) => p.id.toUpperCase() === id.toUpperCase()) : undefined);
 const defaultPage = () => process.env.META_PAGE_ID || "1378673685337029";
+// A brand name (reels/brands.json) or a Page ID -> Page ID; nothing given -> the default Page
+const resolvePage = async (v?: string) => (v?.trim() ? pageIdFor(await loadBrands(), v) : defaultPage());
+const needPage = async (v?: string) => {
+  const id = await resolvePage(v);
+  if (!id) throw new Error(`"${v}" isn't a brand in reels/brands.json (${(await loadBrands()).map((b) => b.id).join(", ")}) or a Facebook Page ID.`);
+  return id;
+};
 const schedulerDeps: SchedulerDeps = {
   async validate(r) {
     const problems: string[] = [];
@@ -248,11 +256,13 @@ const schedulerDeps: SchedulerDeps = {
     const product = await findProduct(r.product_id);
     if (product?.hold) problems.push(`${product.id} is on HOLD (${product.status})`);
     if (r.type === "reel" && !r.video && !r.media.length && !product) problems.push(`no slide set for ${r.product_id}; add slide links in media or a video link`);
-    if (r.voiceover && !product) problems.push("a voiceover needs a product_id with a slide set (see list_reel_products)");
+    if (r.voiceover && !product && !customScript(r.voiceover)) problems.push("a voiceover angle needs a product_id with a slide set (see list_reel_products); or write the script itself in the voiceover cell");
+    if (r.page && !(await resolvePage(r.page))) problems.push(`page "${r.page}" isn't a brand in reels/brands.json or a Facebook Page ID`);
     return problems;
   },
   async build(r) {
     const product = await findProduct(r.product_id);
+    const look = brandLook(matchBrand(await loadBrands(), r.page));
     const slides = r.media.length ? r.media : product!.slides.map((id) => `drive:${id}`);
     let music: string | undefined;
     if (r.music && r.music !== "none") {
@@ -263,8 +273,9 @@ const schedulerDeps: SchedulerDeps = {
     const job = startReelJob(async () => {
       const dir = await mkdtemp(path.join(tmpdir(), "sched-"));
       try {
-        const script = r.voiceover ? await fillScript(product!, r.voiceover, platform) : undefined;
-        const b = await buildReel({ slides: slides.map((src) => ({ src })), music, voiceover: script?.text, outPath: path.join(dir, "reel.mp4") });
+        const text = customScript(r.voiceover) || (r.voiceover ? (await fillScript(product!, r.voiceover, platform)).text : undefined);
+        const { endSlide, ...brandOpts } = look;
+        const b = await buildReel({ slides: [...slides.map((src) => ({ src })), ...(endSlide ? [{ src: endSlide, seconds: 3 }] : [])], music, voiceover: text, ...brandOpts, outPath: path.join(dir, "reel.mp4") });
         return { video_url: await hostFile(b.path), cover_url: await hostFile(b.cover) };
       } finally {
         await rm(dir, { recursive: true, force: true });
@@ -275,17 +286,17 @@ const schedulerDeps: SchedulerDeps = {
     return job.result as { video_url: string; cover_url?: string };
   },
   async publishReel(r, v) {
-    const product = await findProduct(r.product_id);
-    return publishReelWork({ ...v, caption: r.caption, instagram_caption: r.instagram_caption, comment: r.first_comment || product?.url, platforms: r.platforms, pageId: defaultPage() });
+    const product = await findProduct(r.product_id), site = matchBrand(await loadBrands(), r.page)?.site;
+    return publishReelWork({ ...v, caption: r.caption, instagram_caption: r.instagram_caption, comment: r.first_comment || product?.url || site, platforms: r.platforms, pageId: await needPage(r.page) });
   },
   async publishPost(r) {
-    const product = await findProduct(r.product_id);
-    return publishPhotoWork(defaultPage(), { image_url: await rehostDrive(r.media[0]), caption: r.caption, instagram_caption: r.instagram_caption, platforms: r.platforms, first_comment: r.first_comment || product?.url });
+    const product = await findProduct(r.product_id), site = matchBrand(await loadBrands(), r.page)?.site;
+    return publishPhotoWork(await needPage(r.page), { image_url: await rehostDrive(r.media[0]), caption: r.caption, instagram_caption: r.instagram_caption, platforms: r.platforms, first_comment: r.first_comment || product?.url || site });
   },
   // After a restart the state file may be gone; an Instagram post with the same caption in the last 6 hours means it already went out
   async alreadyPosted(r) {
     if (!r.platforms.includes("instagram")) return false;
-    const ig = (await meta.pageInfo(defaultPage())).instagram_business_account?.id;
+    const ig = (await meta.pageInfo(await needPage(r.page))).instagram_business_account?.id;
     if (!ig) return false;
     const caption = (r.instagram_caption || r.caption).trim();
     return ((await meta.igRecentMedia(ig)).data || []).some((m: any) => (m.caption || "").trim() === caption && Date.now() - new Date(m.timestamp).getTime() < 6 * 3_600_000);
@@ -411,7 +422,7 @@ function buildServer() {
     title: "Meta: publish photo post (Facebook + Instagram)",
     description: "Publish a photo post to a Facebook Page and/or its linked Instagram account. Facebook can be scheduled ahead (schedule_at, 10 min to 30 days out); Instagram always posts immediately. Instagram captions can't have clickable links, so end them with 'Link in bio'. Use a public image URL (e.g. the Shopify product image).",
     inputSchema: {
-      page_id: z.string(),
+      page_id: z.string().describe("Facebook Page ID (see meta_list_pages) or a brand name from reels/brands.json, e.g. wallvice"),
       image_url: z.string().url(),
       caption: z.string().min(1).max(2200),
       platforms: z.array(z.enum(["facebook", "instagram"])).default(["facebook", "instagram"]),
@@ -421,7 +432,7 @@ function buildServer() {
     },
   }, wrap(async ({ page_id, ...post }: any) => {
     guardWrite();
-    return await publishPhotoWork(page_id, post);
+    return await publishPhotoWork(await needPage(page_id), post);
   }));
 
   s.registerTool("meta_recent_posts", {
@@ -429,7 +440,7 @@ function buildServer() {
     description: "List a Facebook Page's recent posts with whether each has the Page's own link comment (has_link_comment), plus the first comments still queued for scheduled posts. Use it to find posts missing their link.",
     inputSchema: { page_id: z.string().optional(), limit: z.number().int().min(1).max(100).default(25) },
   }, wrap(async ({ page_id, limit }: any) => {
-    const id = page_id || defaultPage();
+    const id = await needPage(page_id);
     const page = await meta.pageInfo(id);
     return { page: page.name, posts: await meta.fbRecentPosts(id, page.access_token, limit), queued_comments: await pendingComments() };
   }));
@@ -440,7 +451,7 @@ function buildServer() {
     inputSchema: { post_id: z.string(), message: z.string().min(1).max(2200), page_id: z.string().optional() },
   }, wrap(async ({ post_id, message, page_id }: any) => {
     guardWrite();
-    const page = await meta.pageInfo(page_id || defaultPage());
+    const page = await meta.pageInfo(await needPage(page_id));
     return await meta.fbComment(post_id, page.access_token, message);
   }));
 
@@ -458,9 +469,11 @@ function buildServer() {
 
   s.registerTool("build_reel", {
     title: "Reels: build a reel video",
-    description: "Build a 9:16 Reel MP4 (14 s, 1080x1920, H.264/AAC) from a product's designed 5-slide set (product_id like P25) or from your own slide image URLs, with royalty-free music. Starts a background build and returns a job_id (status 'queued'/'building'); call get_reel with it (or call build_reel again with the same settings) until status is 'done', which gives a public video_url (ready for Instagram/Facebook publishing) and a cover image URL. Nothing is posted. Use variants: 2-3 for A/B tests (each gets a different track). About 1-2 minutes per variant.",
+    description: "Build a 9:16 Reel MP4 (14 s, 1080x1920, H.264/AAC) from a product's designed 5-slide set (product_id like P25) or from your own slide image URLs, with royalty-free music. Starts a background build and returns a job_id (status 'queued'/'building'); call get_reel with it (or call build_reel again with the same settings) until status is 'done', which gives a public video_url (ready for Instagram/Facebook publishing) and a cover image URL. Nothing is posted. Use variants: 2-3 for A/B tests (each gets a different track). About 1-2 minutes per variant. For a brand other than 47 Swag Co pass brand (e.g. wallvice) with slide_urls: the reel gets that brand's voice for voiceover_text and its closing card.",
     inputSchema: {
       product_id: z.string().optional().describe("Product with a Drive slide set, e.g. P25 (see list_reel_products)"),
+      brand: z.string().optional().describe("Brand from reels/brands.json, e.g. wallvice: its voiceover voice, colors and closing card. Default: 47 Swag Co (designed slides carry their own closing slide)"),
+      voiceover_text: z.string().min(1).max(700).optional().describe("Your own voiceover script, spoken as one take in the brand's voice with the music dipped under it. No product_id needed. Keep it to about 2.5 words per second of reel (a reel runs 20 s at most, so 45 words or fewer); a script that runs long is refused"),
       slide_urls: z.array(z.string()).min(1).max(8).optional().describe("Or your own slides: public image URLs or Google Drive links (shared 'anyone with the link'), in order"),
       variants: z.number().int().min(1).max(3).default(1),
       music: z.string().optional().describe("Track file name from the music folder (e.g. baileys.mp3), or 'none' for silent. Default: random track per variant"),
@@ -468,9 +481,13 @@ function buildServer() {
       voiceover: z.string().optional().describe("Add a female voiceover with the music dipped under it: a script angle (town-callout, direct-question, moms-gift, new-drop, outfit-solved), 'random' (a different angle per variant), or leave empty for music only. Needs product_id."),
       platform: z.enum(["instagram", "facebook"]).default("instagram").describe("Where it will post; sets the spoken call to action (link in bio vs tap the link)"),
     },
-  }, wrap(async ({ product_id, slide_urls, variants, music, safe_area, voiceover, platform }: any) => {
+  }, wrap(async ({ product_id, slide_urls, variants, music, safe_area, voiceover, platform, brand, voiceover_text }: any) => {
     let product: SlideSet | undefined;
     let slides: string[];
+    const profile = matchBrand(await loadBrands(), brand);
+    if (brand && !profile) throw new Error(`No brand "${brand}". Brands: ${(await loadBrands()).map((b) => b.id).join(", ")} (reels/brands.json).`);
+    if (voiceover && voiceover_text) throw new Error("Give voiceover (a script angle) or voiceover_text (your own script), not both.");
+    const { endSlide, ...brandOpts } = brandLook(profile);
     if (product_id) {
       product = (await slideSets()).find((p) => p.id.toUpperCase() === String(product_id).trim().toUpperCase());
       if (!product) throw new Error(`No slide set for ${product_id}. Use list_reel_products to see the IDs.`);
@@ -490,7 +507,7 @@ function buildServer() {
 
     // Calling again with the same settings returns that build (still running, or finished in the last 30 min)
     // instead of starting another, so clients that can't see get_reel can still collect the result.
-    const key = JSON.stringify([product?.id || slide_urls, variants, music || "", safe_area, voiceover || "", platform]);
+    const key = JSON.stringify([product?.id || slide_urls, variants, music || "", safe_area, voiceover || "", platform, profile?.id || "", voiceover_text || ""]);
     const recent = reelJobsByKey.get(key);
     if (recent && reelJobs.has(recent.id) && (recent.status === "queued" || recent.status === "building" || (recent.status === "done" && Date.now() - recent.started < 30 * 60_000)))
       return await waitForJob(recent, 20_000);
@@ -502,23 +519,27 @@ function buildServer() {
       try {
         const out = [];
         for (let i = 0; i < variants; i++) {
-          const script = voiceover ? await fillScript(product!, voiceover, platform) : undefined;
-          const r = await buildReel({ slides: slides.map((src) => ({ src })), music: tracks[i], safeArea: safe_area, voiceover: script?.text, outPath: path.join(dir, `reel-${i}.mp4`) });
+          const script = voiceover ? await fillScript(product!, voiceover, platform) : voiceover_text ? { angle: "custom", text: String(voiceover_text).trim() } : undefined;
+          const r = await buildReel({
+            slides: [...slides.map((src) => ({ src })), ...(endSlide ? [{ src: endSlide, seconds: 3 }] : [])],
+            music: tracks[i], safeArea: safe_area, voiceover: script?.text, ...brandOpts, outPath: path.join(dir, `reel-${i}.mp4`),
+          });
           out.push({
             variant: String.fromCharCode(65 + i),
             video_url: await hostFile(r.path),
             cover_url: await hostFile(r.cover),
             duration_s: r.duration,
             music: tracks[i] ? path.basename(tracks[i]!) : "none",
-            ...(script ? { voiceover_angle: script.angle, voiceover_voice: r.voice, voiceover_script: script.text } : {}),
+            ...(script ? { voiceover_angle: script.angle, voiceover_voice: (profile?.voice && profile.voice_name) || r.voice, voiceover_script: script.text } : {}),
           });
         }
         return {
+          ...(profile ? { brand: profile.name } : {}),
           product: product && { id: product.id, town: product.town, title: product.title, url: product.url, price_label: product.price_label },
           ...(product?.hold ? { warning: `${product.id} is on HOLD (${product.status}). Don't publish it until Glen releases it.` } : {}),
           reels: out,
           note: "Not posted. Check that the price and offer on the last slide still match checkout before publishing." +
-            (voiceover ? " The voice is AI-generated: turn on the platform's AI-content label when publishing." : ""),
+            (voiceover || voiceover_text ? " The voice is AI-generated: turn on the platform's AI-content label when publishing." : ""),
         };
       } finally {
         await rm(dir, { recursive: true, force: true });
@@ -535,6 +556,7 @@ function buildServer() {
       "Posting is public: show the user the caption, platforms and video first, and only call with confirm: true after they approve. dry_run: true uploads and checks everything on Meta's side but posts nothing. " +
       "Copy rules (47 Swag Co): lead with the town, then the offer; Instagram caption ends with 'Link in bio' (links aren't clickable there); Facebook can carry the full shop link; no delivery-date promises. " +
       "The first comment is the bare product URL only (from product_id). Products on HOLD are refused. No daily cap unless MAX_DAILY_POSTS is set. " +
+      "Another brand: pass brand (e.g. wallvice) to post to that brand's Page and Instagram; the town-first copy rules don't apply and the first comment defaults to the brand's site, so pass first_comment with the exact product link. " +
       "Runs in the background: returns a job_id; call publish_reel again with the same settings (or get_reel with the job_id) until status is 'done'. The voiceover is AI-generated: turn on the AI-content label in the app if required.",
     inputSchema: {
       video_url: z.string().url().describe("MP4 from build_reel, or a Google Drive link to an MP4 shared 'anyone with the link' (copied onto this server first)"),
@@ -544,11 +566,12 @@ function buildServer() {
       product_id: z.string().optional().describe("P01...; used for the first comment (product URL) and the HOLD check"),
       first_comment: z.string().max(2200).optional().describe("Override the first comment; default is the product URL"),
       platforms: z.array(z.enum(["instagram", "facebook"])).default(["instagram", "facebook"]),
-      page_id: z.string().optional().describe("Facebook Page ID; default the 47 Swag Co Page"),
+      brand: z.string().optional().describe("Brand from reels/brands.json, e.g. wallvice: posts to that brand's Page and its Instagram. Default: 47 Swag Co"),
+      page_id: z.string().optional().describe("Facebook Page ID (wins over brand); default the 47 Swag Co Page"),
       dry_run: z.boolean().default(false),
       confirm: z.boolean().optional(),
     },
-  }, wrap(async ({ video_url, cover_url, caption, instagram_caption, product_id, first_comment, platforms, page_id, dry_run, confirm }: any) => {
+  }, wrap(async ({ video_url, cover_url, caption, instagram_caption, product_id, first_comment, platforms, page_id, brand, dry_run, confirm }: any) => {
     guardWrite();
     let product: SlideSet | undefined;
     if (product_id) {
@@ -556,8 +579,10 @@ function buildServer() {
       if (!product) throw new Error(`No product ${product_id}. Use list_reel_products to see the IDs.`);
       if (product.hold && !dry_run) throw new Error(`Refused: ${product.id} is on HOLD (${product.status}). Only Glen can release it.`);
     }
-    const comment = first_comment || product?.url;
-    const pageId = page_id || process.env.META_PAGE_ID || "1378673685337029";
+    const profile = matchBrand(await loadBrands(), brand);
+    if (brand && !profile) throw new Error(`No brand "${brand}". Brands: ${(await loadBrands()).map((b) => b.id).join(", ")} (reels/brands.json).`);
+    const comment = first_comment || product?.url || profile?.site;
+    const pageId = await needPage(page_id || profile?.page_id);
     const page = await meta.pageInfo(pageId);
     const ig = page.instagram_business_account?.id;
     if (platforms.includes("instagram") && !ig) throw new Error("No Instagram professional account is linked to this Page.");
@@ -573,7 +598,7 @@ function buildServer() {
       if (!confirm) throw new Error(`Not posted yet: this publishes publicly to ${platforms.join(" + ")} on ${page.name}. Show the user the video, caption${comment ? ` and first comment (${comment})` : ""}, get their OK, then call again with confirm: true.`);
     }
 
-    const key = JSON.stringify(["publish", video_url, platforms, dry_run]);
+    const key = JSON.stringify(["publish", video_url, platforms, dry_run, pageId]);
     const recent = reelJobsByKey.get(key);
     if (recent && reelJobs.has(recent.id) && recent.status !== "failed") return await waitForJob(recent, 20_000);
 

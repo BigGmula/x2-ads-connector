@@ -1,0 +1,34 @@
+{
+  "notes": [
+    "One entry per brand this connector posts for. Leave a schedule row's page cell (or a tool's brand argument) empty for the default Page (META_PAGE_ID, else 47 Swag Co).",
+    "match: words that pick the brand from a schedule row's page cell or a tool's brand argument (spaces, capitals and @ are ignored).",
+    "page_id: the brand's Facebook Page. Its Instagram account is the one linked to that Page. The connector's system user needs Content access to the Page in Meta Business Settings (see SETUP.md, Step 8).",
+    "site: the first comment when a post has no product link of its own.",
+    "voice: ElevenLabs voice ID for this brand's voiceovers. The voice has to be in My Voices on the account behind ELEVENLABS_API_KEY.",
+    "end_slide: a finished 9:16 closing-card image shown for the last 3 seconds of every reel built for the brand (a file in this repo, a public URL, or a Drive link shared 'anyone with the link').",
+    "end_card (logo, shopUrl, code, cta) + colors: a closing card drawn by ffmpeg instead. It needs ffmpeg's drawtext filter, which the bundled ffmpeg-static build does not have, so prefer end_slide."
+  ],
+  "brands": [
+    {
+      "id": "47swagco",
+      "name": "47 Swag Co",
+      "match": [
+        "47swag",
+        "swagco"
+      ],
+      "page_id": "1378673685337029"
+    },
+    {
+      "id": "wallvice",
+      "name": "Wallvice",
+      "match": [
+        "wallvice"
+      ],
+      "page_id": "1365533129984620",
+      "site": "https://wallvice.com",
+      "voice": "68RUZBDjLe2YBQvv8zFx",
+      "voice_name": "Doug Hamilton",
+      "end_slide": "reels/brand/wallvice-end-card.png"
+    }
+  ]
+}
