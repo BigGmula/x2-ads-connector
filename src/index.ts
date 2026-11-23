@@ -579,7 +579,7 @@ function buildServer() {
       if (!product) throw new Error(`No product ${product_id}. Use list_reel_products to see the IDs.`);
       if (product.hold && !dry_run) throw new Error(`Refused: ${product.id} is on HOLD (${product.status}). Only Glen can release it.`);
     }
-    const profile = matchBrand(await loadBrands(), brand);
+    const profile = matchBrand(await loadBrands(), brand || page_id); // a brand's own Page ID picks the brand too
     if (brand && !profile) throw new Error(`No brand "${brand}". Brands: ${(await loadBrands()).map((b) => b.id).join(", ")} (reels/brands.json).`);
     const comment = first_comment || product?.url || profile?.site;
     const pageId = await needPage(page_id || profile?.page_id);
