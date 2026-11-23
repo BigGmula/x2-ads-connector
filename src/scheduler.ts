@@ -10,6 +10,7 @@ export type Row = {
   row: number; key: string; when?: Date; date: string; time: string; type: string; product_id?: string;
   platforms: Platform[]; caption: string; instagram_caption?: string; first_comment?: string;
   media: string[]; video?: string; cover?: string; voiceover?: string; music?: string; status: string; problems: string[];
+  page?: string; // which brand / Facebook Page the row posts to (see reels/brands.json); empty = the default Page
 };
 // decision: Approve/Skip from the dashboard, which wins over the sheet's status column
 export type RowState = { state?: "building" | "built" | "posting" | "posted" | "failed" | "missed"; decision?: "approved" | "skipped"; at: string; video_url?: string; cover_url?: string; result?: unknown; error?: string };
@@ -106,9 +107,11 @@ export function parseRows(csv: string): Row[] {
       platforms: platforms as Platform[], caption, instagram_caption: get("instagram_caption") || undefined,
       first_comment: get("first_comment") || undefined, media, video, cover: get("cover") || undefined, voiceover: get("voiceover") || undefined,
       music: get("music") || undefined, status: get("status").toLowerCase(), problems,
+      page: get("page") || get("brand") || get("page_id") || undefined,
     };
-    // Same row content -> same key, so a row is posted once even if rows above it move
-    const key = createHash("sha1").update(JSON.stringify([date, time, type, r.product_id, r.platforms, caption, r.instagram_caption, media, video])).digest("hex").slice(0, 16);
+    // Same row content -> same key, so a row is posted once even if rows above it move.
+    // The page is added only when the row names one, so rows from before the page column keep their keys (and aren't posted twice).
+    const key = createHash("sha1").update(JSON.stringify([date, time, type, r.product_id, r.platforms, caption, r.instagram_caption, media, video, ...(r.page ? [r.page.toLowerCase()] : [])])).digest("hex").slice(0, 16);
     return [{ ...r, key }];
   });
 }
